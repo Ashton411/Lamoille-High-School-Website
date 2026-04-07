@@ -1,0 +1,1831 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lamoille High School – Home of the Raiders</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;600;700&family=Source+Sans+3:wght@300;400;600&family=Playfair+Display:wght@700&display=swap" rel="stylesheet" />
+
+  <!-- Firebase SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged }
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+    import { getFirestore, doc, setDoc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, collection, query, where, orderBy, serverTimestamp, onSnapshot }
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+    import { getStorage, ref, uploadBytes, getDownloadURL }
+      from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+
+    // ============================================================
+    //  PASTE YOUR FIREBASE CONFIG HERE
+    // ============================================================
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_AUTH_DOMAIN",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_STORAGE_BUCKET",
+      messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+    // ============================================================
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const storage = getStorage(app);
+
+    window.__firebase = { auth, db, storage, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+      doc, setDoc, getDoc, getDocs, addDoc, updateDoc, deleteDoc, collection, query, where, orderBy, serverTimestamp, onSnapshot };
+  </script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy:    { DEFAULT: '#0a1628', dark: '#060e1a', light: '#122040' },
+            teal:    { DEFAULT: '#0d6e6e', dark: '#095757', light: '#14a0a0', accent: '#1abfbf' },
+            silver:  { DEFAULT: '#b8c4d0', light: '#dce4ec', dark: '#8a9aaa' },
+          },
+          fontFamily: {
+            display: ['Oswald', 'sans-serif'],
+            body:    ['Source Sans 3', 'sans-serif'],
+            serif:   ['Playfair Display', 'serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Source Sans 3', sans-serif; background: #0a1628; color: #dce4ec; margin: 0; }
+    .view { display: none; }
+    .view.active { display: block; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #060e1a; }
+    ::-webkit-scrollbar-thumb { background: #0d6e6e; border-radius: 3px; }
+
+    /* Nav */
+    #main-nav { position: fixed; top: 0; width: 100%; z-index: 100; background: rgba(6,14,26,0.96); backdrop-filter: blur(12px); border-bottom: 2px solid #0d6e6e; }
+    .nav-link { font-family: 'Oswald', sans-serif; letter-spacing: 0.08em; font-size: 0.85rem; color: #b8c4d0; transition: color .2s; padding: 0.4rem 0.8rem; text-transform: uppercase; cursor: pointer; }
+    .nav-link:hover, .nav-link.active { color: #1abfbf; }
+
+    /* Hero */
+    .hero-bg {
+      background: linear-gradient(135deg, #060e1a 0%, #0a1628 40%, #095757 100%);
+      position: relative; overflow: hidden;
+    }
+    .hero-bg::before {
+      content: ''; position: absolute; inset: 0;
+      background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%230d6e6e' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+      opacity: 0.4;
+    }
+    .hero-title { font-family: 'Oswald', sans-serif; font-weight: 700; letter-spacing: 0.04em; text-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+    .raider-stripe { width: 80px; height: 4px; background: linear-gradient(90deg, #0d6e6e, #1abfbf); margin: 1rem auto; }
+
+    /* Cards */
+    .card { background: linear-gradient(135deg, #122040 0%, #0a1628 100%); border: 1px solid #0d6e6e33; border-radius: 8px; transition: all .25s; }
+    .card:hover { border-color: #1abfbf66; transform: translateY(-2px); box-shadow: 0 8px 30px rgba(13,110,110,0.2); }
+    .card-teal { background: linear-gradient(135deg, #095757 0%, #0d6e6e 100%); }
+
+    /* Buttons */
+    .btn { font-family: 'Oswald', sans-serif; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.6rem 1.4rem; border-radius: 4px; cursor: pointer; transition: all .2s; font-size: 0.85rem; border: none; }
+    .btn-teal { background: linear-gradient(135deg, #0d6e6e, #1abfbf); color: white; }
+    .btn-teal:hover { background: linear-gradient(135deg, #095757, #0d6e6e); }
+    .btn-navy { background: #122040; border: 1px solid #0d6e6e; color: #b8c4d0; }
+    .btn-navy:hover { border-color: #1abfbf; color: #1abfbf; }
+    .btn-red { background: #7f1d1d; border: 1px solid #991b1b; color: #fca5a5; }
+    .btn-red:hover { background: #991b1b; }
+    .btn-green { background: #14532d; border: 1px solid #166534; color: #86efac; }
+    .btn-green:hover { background: #166534; }
+
+    /* Section title */
+    .section-title { font-family: 'Oswald', sans-serif; font-size: 1.6rem; font-weight: 700; color: #1abfbf; letter-spacing: 0.06em; text-transform: uppercase; }
+    .section-line { width: 50px; height: 3px; background: linear-gradient(90deg, #0d6e6e, #1abfbf); margin-top: 0.5rem; }
+
+    /* Admin sidebar */
+    #admin-sidebar { background: #060e1a; border-right: 2px solid #0d6e6e33; min-height: calc(100vh - 60px); }
+    .sidebar-link { font-family: 'Oswald', sans-serif; letter-spacing: 0.05em; font-size: 0.85rem; text-transform: uppercase; padding: 0.7rem 1.2rem; border-left: 3px solid transparent; color: #8a9aaa; cursor: pointer; transition: all .2s; display: block; }
+    .sidebar-link:hover, .sidebar-link.active { color: #1abfbf; border-left-color: #1abfbf; background: rgba(13,110,110,0.1); }
+
+    /* Form inputs */
+    .inp { background: #122040; border: 1px solid #0d6e6e55; border-radius: 4px; color: #dce4ec; padding: 0.55rem 0.8rem; width: 100%; font-family: 'Source Sans 3', sans-serif; font-size: 0.9rem; outline: none; transition: border .2s; }
+    .inp:focus { border-color: #1abfbf; }
+    label { font-size: 0.8rem; color: #8a9aaa; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; display: block; }
+
+    /* Table */
+    table { width: 100%; border-collapse: collapse; }
+    th { font-family: 'Oswald', sans-serif; font-size: 0.8rem; letter-spacing: 0.07em; text-transform: uppercase; color: #8a9aaa; padding: 0.6rem 0.8rem; border-bottom: 1px solid #0d6e6e44; text-align: left; }
+    td { padding: 0.65rem 0.8rem; border-bottom: 1px solid #0d6e6e22; font-size: 0.88rem; color: #b8c4d0; }
+    tr:hover td { background: rgba(13,110,110,0.05); }
+
+    /* Badge */
+    .badge { font-family: 'Oswald', sans-serif; font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 2px; }
+    .badge-teal { background: rgba(13,110,110,0.3); color: #1abfbf; border: 1px solid #0d6e6e66; }
+    .badge-silver { background: rgba(184,196,208,0.1); color: #b8c4d0; border: 1px solid #b8c4d044; }
+    .badge-yellow { background: rgba(161,141,6,0.2); color: #fbbf24; border: 1px solid #a16207; }
+    .badge-green { background: rgba(20,83,45,0.3); color: #86efac; border: 1px solid #166534; }
+    .badge-red { background: rgba(127,29,29,0.3); color: #fca5a5; border: 1px solid #991b1b; }
+    .badge-blue { background: rgba(30,58,138,0.3); color: #93c5fd; border: 1px solid #1e3a8a; }
+
+    /* Ticker */
+    .ticker-wrap { overflow: hidden; white-space: nowrap; }
+    .ticker-content { display: inline-block; animation: ticker 30s linear infinite; }
+    @keyframes ticker { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
+
+    /* Announcement bar */
+    #announce-bar { background: linear-gradient(90deg, #095757, #0d6e6e); }
+
+    /* Gallery */
+    .gallery-img { width: 100%; height: 180px; object-fit: cover; border-radius: 6px; cursor: pointer; transition: transform .2s; }
+    .gallery-img:hover { transform: scale(1.03); }
+
+    /* Modal */
+    .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.85); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 1rem; }
+    .modal-box { background: #0a1628; border: 1px solid #0d6e6e; border-radius: 10px; max-width: 600px; width: 100%; max-height: 90vh; overflow-y: auto; }
+
+    /* Footer */
+    footer { background: #060e1a; border-top: 2px solid #0d6e6e44; }
+
+    /* Mobile menu */
+    #mobile-menu { display: none; }
+    #mobile-menu.open { display: block; }
+
+    /* Quill-like rich text */
+    .rich-content h2 { font-family: 'Oswald', sans-serif; color: #1abfbf; font-size: 1.3rem; margin: 1rem 0 0.5rem; }
+    .rich-content p { margin: 0.5rem 0; line-height: 1.7; }
+    .rich-content ul { list-style: disc; padding-left: 1.5rem; }
+    .rich-content a { color: #1abfbf; text-decoration: underline; }
+
+    /* Scrollable tabs */
+    .tab-bar { overflow-x: auto; white-space: nowrap; -webkit-overflow-scrolling: touch; }
+    .tab-bar::-webkit-scrollbar { height: 3px; }
+    .tab { display: inline-block; font-family: 'Oswald', sans-serif; font-size: 0.82rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.5rem 1rem; border-bottom: 2px solid transparent; cursor: pointer; color: #8a9aaa; transition: all .2s; }
+    .tab.active, .tab:hover { color: #1abfbf; border-bottom-color: #1abfbf; }
+
+    /* Fade in */
+    .fade-in { animation: fadeIn .4s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* Toast */
+    #toast { position: fixed; bottom: 1.5rem; right: 1.5rem; z-index: 9999; background: #0d6e6e; color: white; padding: 0.8rem 1.4rem; border-radius: 6px; font-family: 'Oswald', sans-serif; letter-spacing: 0.05em; font-size: 0.9rem; opacity: 0; transition: opacity .3s; pointer-events: none; }
+    #toast.show { opacity: 1; }
+
+    @media (max-width: 768px) {
+      .hero-title { font-size: 2.5rem !important; }
+    }
+  </style>
+</head>
+<body class="min-h-screen">
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<!-- NAVIGATION -->
+<nav id="main-nav" class="px-4 py-3">
+  <div class="max-w-7xl mx-auto flex items-center justify-between">
+    <div class="flex items-center gap-3 cursor-pointer" onclick="navigate('home')">
+      <div class="w-10 h-10 rounded-full bg-teal flex items-center justify-center">
+        <span class="font-display font-bold text-white text-sm">LHS</span>
+      </div>
+      <div>
+        <div class="font-display font-bold text-silver-light text-sm leading-tight">LAMOILLE HIGH</div>
+        <div class="text-teal-accent text-xs font-display tracking-widest">RAIDERS</div>
+      </div>
+    </div>
+
+    <!-- Desktop nav links -->
+    <div id="nav-links" class="hidden md:flex items-center gap-1">
+      <span class="nav-link" onclick="navigate('home')">Home</span>
+      <span class="nav-link" data-page-link="athletics">Athletics</span>
+      <span class="nav-link" data-page-link="clubs">Clubs</span>
+      <span class="nav-link" data-page-link="departments">Departments</span>
+      <span class="nav-link" data-page-link="staff">Staff</span>
+      <span class="nav-link" data-page-link="news">News</span>
+      <span class="nav-link" data-page-link="gallery">Gallery</span>
+      <span id="extra-nav-links"></span>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <span id="nav-login-btn" class="nav-link hidden md:block" onclick="navigate('login')">Login</span>
+      <span id="nav-portal-btn" class="hidden">
+        <button class="btn btn-teal text-xs py-1 px-3" onclick="openPortal()">Portal</button>
+      </span>
+      <span id="nav-user-name" class="hidden text-xs text-silver font-display tracking-wide"></span>
+      <button id="nav-logout-btn" class="btn btn-navy text-xs py-1 px-3 hidden" onclick="doLogout()">Logout</button>
+      <!-- Hamburger -->
+      <button class="md:hidden text-silver" onclick="toggleMobileMenu()">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </div>
+  </div>
+  <!-- Mobile menu -->
+  <div id="mobile-menu" class="md:hidden mt-2 pb-2 border-t border-teal/20 pt-2">
+    <span class="nav-link block" onclick="navigate('home');toggleMobileMenu()">Home</span>
+    <span class="nav-link block" data-page-link="athletics" onclick="toggleMobileMenu()">Athletics</span>
+    <span class="nav-link block" data-page-link="clubs" onclick="toggleMobileMenu()">Clubs</span>
+    <span class="nav-link block" data-page-link="departments" onclick="toggleMobileMenu()">Departments</span>
+    <span class="nav-link block" data-page-link="staff" onclick="toggleMobileMenu()">Staff</span>
+    <span class="nav-link block" data-page-link="news" onclick="toggleMobileMenu()">News</span>
+    <span class="nav-link block" data-page-link="gallery" onclick="toggleMobileMenu()">Gallery</span>
+    <span id="mobile-extra-nav"></span>
+    <span class="nav-link block" id="mobile-login-link" onclick="navigate('login');toggleMobileMenu()">Login</span>
+  </div>
+</nav>
+
+<!-- ============================================================ -->
+<!--  HOME VIEW -->
+<!-- ============================================================ -->
+<div id="view-home" class="view pt-16">
+
+  <!-- Announcement ticker -->
+  <div id="announce-bar" class="py-2 px-4">
+    <div class="max-w-7xl mx-auto flex items-center gap-3">
+      <span class="font-display text-xs tracking-widest text-white bg-navy px-2 py-0.5 rounded flex-shrink-0">ANNOUNCEMENTS</span>
+      <div class="ticker-wrap flex-1">
+        <div id="ticker-text" class="ticker-content text-white text-sm font-body">Loading announcements...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HERO -->
+  <section class="hero-bg py-28 text-center relative">
+    <div class="relative z-10 px-4">
+      <div class="font-display text-teal-accent text-sm tracking-widest mb-3 uppercase" id="hero-subtitle">Lamoille County, Vermont</div>
+      <h1 class="hero-title text-5xl md:text-7xl text-white mb-3" id="hero-title">LAMOILLE<br><span class="text-teal-accent">HIGH SCHOOL</span></h1>
+      <div class="raider-stripe"></div>
+      <p class="text-silver text-lg mt-3 font-body" id="hero-tagline">Home of the Raiders – Excellence in Education & Athletics</p>
+      <div class="flex flex-wrap gap-3 justify-center mt-8">
+        <button id="hero-btn1" class="btn btn-teal px-8 py-3 text-sm" onclick="navigate('login')">Student Portal</button>
+        <button id="hero-btn2" class="btn btn-navy px-8 py-3 text-sm" onclick="scrollToSection('events-section')">Upcoming Events</button>
+      </div>
+    </div>
+    <!-- Decorative shield -->
+    <div class="absolute right-8 bottom-8 opacity-5 hidden lg:block">
+      <svg width="200" height="240" viewBox="0 0 200 240" fill="none">
+        <path d="M100 10 L190 50 L190 140 Q190 200 100 230 Q10 200 10 140 L10 50 Z" fill="#1abfbf"/>
+        <text x="100" y="140" text-anchor="middle" font-family="Oswald" font-size="48" font-weight="700" fill="white">R</text>
+      </svg>
+    </div>
+  </section>
+
+  <!-- Quick stats bar -->
+  <div class="bg-navy-light border-y border-teal/20 py-4">
+    <div class="max-w-7xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-0 divide-x divide-teal/20">
+      <div class="text-center py-2 px-4" id="stat-1-wrap">
+        <div class="font-display text-2xl text-teal-accent" id="stat-1-val">850+</div>
+        <div class="text-silver text-xs tracking-wide" id="stat-1-label">Students</div>
+      </div>
+      <div class="text-center py-2 px-4" id="stat-2-wrap">
+        <div class="font-display text-2xl text-teal-accent" id="stat-2-val">60+</div>
+        <div class="text-silver text-xs tracking-wide" id="stat-2-label">Faculty & Staff</div>
+      </div>
+      <div class="text-center py-2 px-4" id="stat-3-wrap">
+        <div class="font-display text-2xl text-teal-accent" id="stat-3-val">25+</div>
+        <div class="text-silver text-xs tracking-wide" id="stat-3-label">Sports Teams</div>
+      </div>
+      <div class="text-center py-2 px-4" id="stat-4-wrap">
+        <div class="font-display text-2xl text-teal-accent" id="stat-4-val">40+</div>
+        <div class="text-silver text-xs tracking-wide" id="stat-4-label">Clubs & Activities</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main content area -->
+  <div class="max-w-7xl mx-auto px-4 py-12">
+    <div class="grid lg:grid-cols-3 gap-8">
+
+      <!-- Left: Announcements + Events -->
+      <div class="lg:col-span-2 space-y-10">
+
+        <!-- Announcements -->
+        <section>
+          <div class="flex items-center justify-between mb-5">
+            <div>
+              <div class="section-title">Announcements</div>
+              <div class="section-line"></div>
+            </div>
+          </div>
+          <div id="announcements-list" class="space-y-3">
+            <div class="text-silver text-sm">Loading...</div>
+          </div>
+        </section>
+
+        <!-- Events -->
+        <section id="events-section">
+          <div class="flex items-center justify-between mb-5">
+            <div>
+              <div class="section-title">Upcoming Events</div>
+              <div class="section-line"></div>
+            </div>
+          </div>
+          <div id="events-list" class="space-y-3">
+            <div class="text-silver text-sm">Loading...</div>
+          </div>
+        </section>
+
+        <!-- News -->
+        <section>
+          <div class="flex items-center justify-between mb-5">
+            <div>
+              <div class="section-title">Latest News</div>
+              <div class="section-line"></div>
+            </div>
+          </div>
+          <div id="news-list" class="grid sm:grid-cols-2 gap-4">
+            <div class="text-silver text-sm">Loading...</div>
+          </div>
+        </section>
+
+      </div>
+
+      <!-- Right sidebar -->
+      <div class="space-y-6">
+
+        <!-- Quick links -->
+        <div class="card p-5">
+          <div class="font-display text-sm tracking-widest text-teal-accent uppercase mb-4">Quick Links</div>
+          <div id="quick-links-list" class="space-y-2">
+            <a href="#" data-page-link="athletics" class="flex items-center gap-2 text-silver hover:text-teal-accent transition-colors text-sm py-1 border-b border-teal/10">
+              <span class="text-teal">▶</span> Athletics
+            </a>
+            <a href="#" data-page-link="clubs" class="flex items-center gap-2 text-silver hover:text-teal-accent transition-colors text-sm py-1 border-b border-teal/10">
+              <span class="text-teal">▶</span> Clubs & Organizations
+            </a>
+            <a href="#" data-page-link="departments" class="flex items-center gap-2 text-silver hover:text-teal-accent transition-colors text-sm py-1 border-b border-teal/10">
+              <span class="text-teal">▶</span> Departments
+            </a>
+            <a href="#" data-page-link="staff" class="flex items-center gap-2 text-silver hover:text-teal-accent transition-colors text-sm py-1 border-b border-teal/10">
+              <span class="text-teal">▶</span> Staff Directory
+            </a>
+            <a href="#" data-page-link="gallery" class="flex items-center gap-2 text-silver hover:text-teal-accent transition-colors text-sm py-1">
+              <span class="text-teal">▶</span> Photo Gallery
+            </a>
+          </div>
+        </div>
+
+        <!-- Roblox link -->
+        <div id="roblox-card" class="card p-5 hidden">
+          <div class="font-display text-sm tracking-widest text-teal-accent uppercase mb-3">🎮 Roblox Game</div>
+          <p class="text-silver text-sm mb-3" id="roblox-desc">Play our official school Roblox game!</p>
+          <a id="roblox-link" href="#" target="_blank" class="btn btn-teal w-full text-center block py-2">Play Now</a>
+        </div>
+
+        <!-- Trello board -->
+        <div id="trello-card" class="card p-5 hidden">
+          <div class="font-display text-sm tracking-widest text-teal-accent uppercase mb-3">📋 Trello Board</div>
+          <a id="trello-link" href="#" target="_blank" class="btn btn-navy w-full text-center block py-2">Open Board</a>
+        </div>
+
+        <!-- Calendar mini -->
+        <div class="card p-5">
+          <div class="font-display text-sm tracking-widest text-teal-accent uppercase mb-3">School Year</div>
+          <div class="text-silver text-sm" id="school-year-info">2024–2025 Academic Year</div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Photo Gallery preview -->
+    <section class="mt-12">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <div class="section-title">Photo Gallery</div>
+          <div class="section-line"></div>
+        </div>
+        <button class="btn btn-navy text-xs py-1" onclick="loadPage('gallery')">View All</button>
+      </div>
+      <div id="gallery-preview" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+        <div class="text-silver text-sm">Loading...</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Footer -->
+  <footer class="mt-12 py-10 px-4">
+    <div class="max-w-7xl mx-auto">
+      <div class="grid md:grid-cols-3 gap-8 mb-8">
+        <div>
+          <div class="font-display text-teal-accent text-lg tracking-wide mb-3">LAMOILLE HIGH SCHOOL</div>
+          <div id="footer-address" class="text-silver text-sm leading-relaxed">
+            Lamoille County, Vermont<br>
+            Home of the Raiders
+          </div>
+        </div>
+        <div>
+          <div class="font-display text-sm tracking-widest text-silver-dark uppercase mb-3">Contact</div>
+          <div id="footer-contact" class="text-silver text-sm space-y-1">
+            <div>📞 (802) 555-0100</div>
+            <div>✉️ info@lamoillehigh.edu</div>
+            <div>🌐 lamoillehigh.edu</div>
+          </div>
+        </div>
+        <div>
+          <div class="font-display text-sm tracking-widest text-silver-dark uppercase mb-3">Quick Links</div>
+          <div class="space-y-1">
+            <div class="text-silver text-sm cursor-pointer hover:text-teal-accent" onclick="navigate('login')">Staff Login</div>
+            <div class="text-silver text-sm cursor-pointer hover:text-teal-accent" data-page-link="athletics">Athletics</div>
+            <div class="text-silver text-sm cursor-pointer hover:text-teal-accent" data-page-link="clubs">Clubs</div>
+          </div>
+        </div>
+      </div>
+      <div class="border-t border-teal/20 pt-5 flex flex-col md:flex-row items-center justify-between gap-3">
+        <div id="footer-copy" class="text-silver-dark text-xs">© 2025 Lamoille High School. All rights reserved.</div>
+        <div class="font-display text-xs tracking-widest text-teal/60">GO RAIDERS!</div>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<!-- ============================================================ -->
+<!--  DYNAMIC PAGE VIEW (Athletics, Clubs, etc.) -->
+<!-- ============================================================ -->
+<div id="view-page" class="view pt-16">
+  <div class="max-w-5xl mx-auto px-4 py-10">
+    <button class="btn btn-navy text-xs mb-6" onclick="navigate('home')">← Back to Home</button>
+    <div id="page-content" class="fade-in"></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  LOGIN VIEW -->
+<!-- ============================================================ -->
+<div id="view-login" class="view pt-16 min-h-screen flex items-center justify-center px-4">
+  <div class="w-full max-w-md">
+    <div class="card p-8 fade-in">
+      <div class="text-center mb-6">
+        <div class="w-16 h-16 rounded-full bg-teal mx-auto flex items-center justify-center mb-3">
+          <span class="font-display font-bold text-white text-xl">LHS</span>
+        </div>
+        <div class="font-display text-2xl text-silver-light tracking-wide">STAFF PORTAL</div>
+        <div class="text-silver text-xs mt-1">Lamoille High School</div>
+      </div>
+
+      <div class="tab-bar mb-6 border-b border-teal/20">
+        <div class="tab active" id="tab-signin" onclick="switchAuthTab('signin')">Sign In</div>
+        <div class="tab" id="tab-signup" onclick="switchAuthTab('signup')">Request Access</div>
+      </div>
+
+      <!-- Sign in -->
+      <div id="auth-signin">
+        <div class="space-y-4">
+          <div>
+            <label>Email</label>
+            <input type="email" id="login-email" class="inp" placeholder="your@email.com" />
+          </div>
+          <div>
+            <label>Password</label>
+            <input type="password" id="login-pass" class="inp" placeholder="••••••••" />
+          </div>
+          <button class="btn btn-teal w-full py-3" onclick="doLogin()">Sign In</button>
+          <div id="login-error" class="text-red-400 text-xs text-center hidden"></div>
+        </div>
+      </div>
+
+      <!-- Sign up -->
+      <div id="auth-signup" class="hidden">
+        <div class="space-y-4">
+          <div>
+            <label>Full Name</label>
+            <input type="text" id="signup-name" class="inp" placeholder="Jane Smith" />
+          </div>
+          <div>
+            <label>Email</label>
+            <input type="email" id="signup-email" class="inp" placeholder="your@email.com" />
+          </div>
+          <div>
+            <label>Password</label>
+            <input type="password" id="signup-pass" class="inp" placeholder="Min 6 characters" />
+          </div>
+          <div>
+            <label>Role Requested</label>
+            <select id="signup-role" class="inp">
+              <option value="teacher">Teacher</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <button class="btn btn-teal w-full py-3" onclick="doSignup()">Request Access</button>
+          <div id="signup-error" class="text-red-400 text-xs text-center hidden"></div>
+          <div id="signup-success" class="text-green-400 text-xs text-center hidden">Account created! Awaiting admin approval.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  TEACHER PORTAL VIEW -->
+<!-- ============================================================ -->
+<div id="view-teacher" class="view pt-16">
+  <div class="max-w-4xl mx-auto px-4 py-10">
+    <div class="flex items-center justify-between mb-8">
+      <div>
+        <div class="section-title">Teacher Portal</div>
+        <div class="section-line"></div>
+        <div class="text-silver text-sm mt-1" id="teacher-welcome">Welcome!</div>
+      </div>
+    </div>
+
+    <div class="grid md:grid-cols-2 gap-6">
+      <!-- Submit attendance -->
+      <div class="card p-6">
+        <div class="font-display text-teal-accent tracking-wide mb-4">Submit Attendance</div>
+        <div class="space-y-3">
+          <div>
+            <label>Session Name</label>
+            <input type="text" id="att-session" class="inp" placeholder="e.g. Period 3 – Math" />
+          </div>
+          <div>
+            <label>Date</label>
+            <input type="date" id="att-date" class="inp" />
+          </div>
+          <div>
+            <label>Time</label>
+            <input type="time" id="att-time" class="inp" />
+          </div>
+          <div>
+            <label>Students Present (count or names)</label>
+            <textarea id="att-students" class="inp" rows="3" placeholder="e.g. 24 students present, or list names..."></textarea>
+          </div>
+          <div>
+            <label>Notes</label>
+            <textarea id="att-notes" class="inp" rows="2" placeholder="Any additional notes..."></textarea>
+          </div>
+          <button class="btn btn-teal w-full py-2.5" onclick="submitAttendance()">Submit Attendance</button>
+        </div>
+      </div>
+
+      <!-- My submissions -->
+      <div class="card p-6">
+        <div class="font-display text-teal-accent tracking-wide mb-4">My Submissions</div>
+        <div id="teacher-submissions" class="space-y-3 max-h-96 overflow-y-auto">
+          <div class="text-silver text-sm">Loading...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  ADMIN PANEL VIEW -->
+<!-- ============================================================ -->
+<div id="view-admin" class="view pt-16 flex">
+
+  <!-- Sidebar -->
+  <div id="admin-sidebar" class="w-56 flex-shrink-0 hidden md:block">
+    <div class="py-4">
+      <div class="px-4 py-2 mb-2">
+        <div class="font-display text-xs tracking-widest text-teal/60 uppercase">Admin Panel</div>
+      </div>
+      <div class="sidebar-link active" onclick="showAdminTab('dashboard')" id="stab-dashboard">📊 Dashboard</div>
+      <div class="sidebar-link" onclick="showAdminTab('users')" id="stab-users">👥 Users</div>
+      <div class="sidebar-link" onclick="showAdminTab('attendance')" id="stab-attendance">📋 Attendance</div>
+      <div class="sidebar-link" onclick="showAdminTab('announcements')" id="stab-announcements">📢 Announcements</div>
+      <div class="sidebar-link" onclick="showAdminTab('events')" id="stab-events">📅 Events</div>
+      <div class="sidebar-link" onclick="showAdminTab('news')" id="stab-news">📰 News</div>
+      <div class="sidebar-link" onclick="showAdminTab('pages')" id="stab-pages">📄 Pages</div>
+      <div class="sidebar-link" onclick="showAdminTab('gallery')" id="stab-gallery">🖼 Gallery</div>
+      <div class="sidebar-link" onclick="showAdminTab('staff')" id="stab-staff">👤 Staff Directory</div>
+      <div class="sidebar-link" onclick="showAdminTab('settings')" id="stab-settings">⚙️ Settings</div>
+    </div>
+  </div>
+
+  <!-- Mobile tab bar -->
+  <div class="md:hidden fixed bottom-0 left-0 right-0 bg-navy-dark border-t border-teal/20 z-50 flex overflow-x-auto">
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('dashboard')">📊</button>
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('users')">👥</button>
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('attendance')">📋</button>
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('announcements')">📢</button>
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('events')">📅</button>
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('pages')">📄</button>
+    <button class="flex-1 py-2 text-xs font-display tracking-wide text-silver" onclick="showAdminTab('settings')">⚙️</button>
+  </div>
+
+  <!-- Admin Content -->
+  <div class="flex-1 p-4 md:p-8 pb-16 md:pb-8 overflow-y-auto">
+
+    <!-- Dashboard -->
+    <div id="atab-dashboard" class="admin-tab fade-in">
+      <div class="section-title mb-1">Dashboard</div>
+      <div class="section-line mb-6"></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div class="card p-4 text-center">
+          <div class="font-display text-3xl text-teal-accent" id="dash-users">-</div>
+          <div class="text-silver text-xs mt-1">Total Users</div>
+        </div>
+        <div class="card p-4 text-center">
+          <div class="font-display text-3xl text-yellow-400" id="dash-pending">-</div>
+          <div class="text-silver text-xs mt-1">Pending Approval</div>
+        </div>
+        <div class="card p-4 text-center">
+          <div class="font-display text-3xl text-teal-accent" id="dash-attendance">-</div>
+          <div class="text-silver text-xs mt-1">Attendance Records</div>
+        </div>
+        <div class="card p-4 text-center">
+          <div class="font-display text-3xl text-teal-accent" id="dash-news">-</div>
+          <div class="text-silver text-xs mt-1">News Posts</div>
+        </div>
+      </div>
+      <div class="card p-5">
+        <div class="font-display text-teal-accent tracking-wide mb-3">Recent Activity</div>
+        <div id="dash-activity" class="text-silver text-sm">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Users -->
+    <div id="atab-users" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">User Management</div>
+      <div class="section-line mb-6"></div>
+      <div class="tab-bar mb-4 border-b border-teal/20">
+        <div class="tab active" id="utab-pending" onclick="switchUserTab('pending')">Pending</div>
+        <div class="tab" id="utab-active" onclick="switchUserTab('active')">Active</div>
+        <div class="tab" id="utab-all" onclick="switchUserTab('all')">All Users</div>
+      </div>
+      <div id="users-table-wrap" class="card overflow-hidden">
+        <table>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="users-table-body"><tr><td colspan="5" class="text-center text-silver">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Attendance -->
+    <div id="atab-attendance" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Attendance Records</div>
+      <div class="section-line mb-6"></div>
+      <div class="flex flex-wrap gap-3 mb-4">
+        <input type="text" id="att-filter-teacher" class="inp w-48" placeholder="Filter by teacher..." oninput="loadAdminAttendance()" />
+        <input type="date" id="att-filter-date" class="inp w-40" onchange="loadAdminAttendance()" />
+        <button class="btn btn-navy text-xs" onclick="document.getElementById('att-filter-teacher').value='';document.getElementById('att-filter-date').value='';loadAdminAttendance()">Clear</button>
+      </div>
+      <div class="card overflow-hidden">
+        <table>
+          <thead><tr><th>Teacher</th><th>Session</th><th>Date</th><th>Time</th><th>Status</th><th>Actions</th></tr></thead>
+          <tbody id="att-table-body"><tr><td colspan="6" class="text-center text-silver">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Announcements -->
+    <div id="atab-announcements" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Announcements</div>
+      <div class="section-line mb-6"></div>
+      <div class="card p-5 mb-5">
+        <div class="font-display text-teal-accent tracking-wide mb-3">New Announcement</div>
+        <div class="space-y-3">
+          <div><label>Title</label><input type="text" id="ann-title" class="inp" placeholder="Announcement title" /></div>
+          <div><label>Body</label><textarea id="ann-body" class="inp" rows="3" placeholder="Announcement content..."></textarea></div>
+          <div class="flex gap-2">
+            <div class="flex-1"><label>Type</label>
+              <select id="ann-type" class="inp">
+                <option value="info">Info</option>
+                <option value="urgent">Urgent</option>
+                <option value="event">Event</option>
+              </select>
+            </div>
+            <div class="flex-1"><label>Expiry Date (optional)</label><input type="date" id="ann-expiry" class="inp" /></div>
+          </div>
+          <button class="btn btn-teal" onclick="addAnnouncement()">Post Announcement</button>
+        </div>
+      </div>
+      <div id="ann-list" class="space-y-3"></div>
+    </div>
+
+    <!-- Events -->
+    <div id="atab-events" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Events</div>
+      <div class="section-line mb-6"></div>
+      <div class="card p-5 mb-5">
+        <div class="font-display text-teal-accent tracking-wide mb-3">New Event</div>
+        <div class="space-y-3">
+          <div><label>Event Name</label><input type="text" id="ev-name" class="inp" /></div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label>Date</label><input type="date" id="ev-date" class="inp" /></div>
+            <div><label>Time</label><input type="time" id="ev-time" class="inp" /></div>
+          </div>
+          <div><label>Location</label><input type="text" id="ev-location" class="inp" placeholder="Gym, Auditorium, etc." /></div>
+          <div><label>Description</label><textarea id="ev-desc" class="inp" rows="2"></textarea></div>
+          <div><label>Category</label>
+            <select id="ev-cat" class="inp">
+              <option>Academic</option><option>Athletics</option><option>Arts</option><option>Social</option><option>Other</option>
+            </select>
+          </div>
+          <button class="btn btn-teal" onclick="addEvent()">Add Event</button>
+        </div>
+      </div>
+      <div id="ev-list" class="space-y-3"></div>
+    </div>
+
+    <!-- News -->
+    <div id="atab-news" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">News Posts</div>
+      <div class="section-line mb-6"></div>
+      <div class="card p-5 mb-5">
+        <div class="font-display text-teal-accent tracking-wide mb-3">New Post</div>
+        <div class="space-y-3">
+          <div><label>Headline</label><input type="text" id="news-title" class="inp" /></div>
+          <div><label>Image URL (optional)</label><input type="text" id="news-img" class="inp" placeholder="https://..." /></div>
+          <div><label>Content</label><textarea id="news-body" class="inp" rows="5" placeholder="Write your news content here..."></textarea></div>
+          <div><label>Category</label>
+            <select id="news-cat" class="inp">
+              <option>General</option><option>Athletics</option><option>Academics</option><option>Arts</option><option>Community</option>
+            </select>
+          </div>
+          <button class="btn btn-teal" onclick="addNews()">Publish Post</button>
+        </div>
+      </div>
+      <div id="news-admin-list" class="space-y-3"></div>
+    </div>
+
+    <!-- Pages -->
+    <div id="atab-pages" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Page Editor</div>
+      <div class="section-line mb-6"></div>
+      <div class="grid md:grid-cols-2 gap-6">
+        <div>
+          <div class="card p-5 mb-4">
+            <div class="font-display text-teal-accent tracking-wide mb-3">Create New Page</div>
+            <div class="space-y-3">
+              <div><label>Page Title</label><input type="text" id="page-title-new" class="inp" placeholder="e.g. Athletics" /></div>
+              <div><label>Page Slug (URL)</label><input type="text" id="page-slug-new" class="inp" placeholder="e.g. athletics" /></div>
+              <div><label>Show in Navigation?</label>
+                <select id="page-nav-new" class="inp"><option value="yes">Yes</option><option value="no">No</option></select>
+              </div>
+              <button class="btn btn-teal" onclick="createPage()">Create Page</button>
+            </div>
+          </div>
+          <div class="card p-5">
+            <div class="font-display text-teal-accent tracking-wide mb-3">All Pages</div>
+            <div id="pages-list" class="space-y-2"></div>
+          </div>
+        </div>
+        <div class="card p-5" id="page-editor-panel">
+          <div class="font-display text-teal-accent tracking-wide mb-3">Edit Page Content</div>
+          <div id="no-page-selected" class="text-silver text-sm">← Select a page to edit</div>
+          <div id="page-edit-form" class="hidden space-y-3">
+            <div><label>Page Title</label><input type="text" id="page-edit-title" class="inp" /></div>
+            <div><label>Content (HTML supported)</label>
+              <textarea id="page-edit-content" class="inp font-mono text-xs" rows="14" placeholder="<h2>Section Title</h2><p>Your content here...</p>"></textarea>
+            </div>
+            <div><label>Show in Nav?</label>
+              <select id="page-edit-nav" class="inp"><option value="yes">Yes</option><option value="no">No</option></select>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-teal flex-1" onclick="savePage()">Save Page</button>
+              <button class="btn btn-red" onclick="deletePage()">Delete</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gallery Admin -->
+    <div id="atab-gallery" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Photo Gallery</div>
+      <div class="section-line mb-6"></div>
+      <div class="card p-5 mb-5">
+        <div class="font-display text-teal-accent tracking-wide mb-3">Add Photo</div>
+        <div class="space-y-3">
+          <div><label>Image URL</label><input type="text" id="gal-url" class="inp" placeholder="https://..." /></div>
+          <div><label>Caption</label><input type="text" id="gal-caption" class="inp" placeholder="Photo description..." /></div>
+          <div><label>Category</label><input type="text" id="gal-cat" class="inp" placeholder="e.g. Athletics, Prom, Graduation" /></div>
+          <button class="btn btn-teal" onclick="addGalleryPhoto()">Add Photo</button>
+        </div>
+      </div>
+      <div id="gal-admin-list" class="grid grid-cols-2 sm:grid-cols-3 gap-3"></div>
+    </div>
+
+    <!-- Staff Admin -->
+    <div id="atab-staff" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Staff Directory</div>
+      <div class="section-line mb-6"></div>
+      <div class="card p-5 mb-5">
+        <div class="font-display text-teal-accent tracking-wide mb-3">Add Staff Member</div>
+        <div class="grid md:grid-cols-2 gap-3">
+          <div><label>Full Name</label><input type="text" id="staff-name" class="inp" /></div>
+          <div><label>Title / Position</label><input type="text" id="staff-title" class="inp" /></div>
+          <div><label>Department</label><input type="text" id="staff-dept" class="inp" /></div>
+          <div><label>Email</label><input type="email" id="staff-email" class="inp" /></div>
+          <div><label>Phone (optional)</label><input type="text" id="staff-phone" class="inp" /></div>
+          <div><label>Photo URL (optional)</label><input type="text" id="staff-photo" class="inp" placeholder="https://..." /></div>
+        </div>
+        <button class="btn btn-teal mt-3" onclick="addStaffMember()">Add Staff</button>
+      </div>
+      <div id="staff-admin-list" class="space-y-2"></div>
+    </div>
+
+    <!-- Settings -->
+    <div id="atab-settings" class="admin-tab hidden fade-in">
+      <div class="section-title mb-1">Site Settings</div>
+      <div class="section-line mb-6"></div>
+      <div class="grid md:grid-cols-2 gap-6">
+
+        <div class="card p-5">
+          <div class="font-display text-teal-accent tracking-wide mb-4">Hero Section</div>
+          <div class="space-y-3">
+            <div><label>Hero Title</label><input type="text" id="set-hero-title" class="inp" /></div>
+            <div><label>Hero Subtitle</label><input type="text" id="set-hero-subtitle" class="inp" /></div>
+            <div><label>Hero Tagline</label><input type="text" id="set-hero-tagline" class="inp" /></div>
+            <button class="btn btn-teal w-full" onclick="saveSettings('hero')">Save Hero</button>
+          </div>
+        </div>
+
+        <div class="card p-5">
+          <div class="font-display text-teal-accent tracking-wide mb-4">Stats Bar</div>
+          <div class="space-y-3">
+            <div class="grid grid-cols-2 gap-2">
+              <div><label>Stat 1 Value</label><input type="text" id="set-s1v" class="inp" /></div>
+              <div><label>Stat 1 Label</label><input type="text" id="set-s1l" class="inp" /></div>
+              <div><label>Stat 2 Value</label><input type="text" id="set-s2v" class="inp" /></div>
+              <div><label>Stat 2 Label</label><input type="text" id="set-s2l" class="inp" /></div>
+              <div><label>Stat 3 Value</label><input type="text" id="set-s3v" class="inp" /></div>
+              <div><label>Stat 3 Label</label><input type="text" id="set-s3l" class="inp" /></div>
+              <div><label>Stat 4 Value</label><input type="text" id="set-s4v" class="inp" /></div>
+              <div><label>Stat 4 Label</label><input type="text" id="set-s4l" class="inp" /></div>
+            </div>
+            <button class="btn btn-teal w-full" onclick="saveSettings('stats')">Save Stats</button>
+          </div>
+        </div>
+
+        <div class="card p-5">
+          <div class="font-display text-teal-accent tracking-wide mb-4">Footer</div>
+          <div class="space-y-3">
+            <div><label>Address / School Info</label><textarea id="set-footer-addr" class="inp" rows="3"></textarea></div>
+            <div><label>Contact Info (HTML)</label><textarea id="set-footer-contact" class="inp" rows="3"></textarea></div>
+            <div><label>Copyright Text</label><input type="text" id="set-footer-copy" class="inp" /></div>
+            <button class="btn btn-teal w-full" onclick="saveSettings('footer')">Save Footer</button>
+          </div>
+        </div>
+
+        <div class="card p-5">
+          <div class="font-display text-teal-accent tracking-wide mb-4">External Links</div>
+          <div class="space-y-3">
+            <div><label>Roblox Game URL</label><input type="text" id="set-roblox-url" class="inp" placeholder="https://roblox.com/games/..." /></div>
+            <div><label>Roblox Description</label><input type="text" id="set-roblox-desc" class="inp" /></div>
+            <div><label>Trello Board URL</label><input type="text" id="set-trello-url" class="inp" placeholder="https://trello.com/b/..." /></div>
+            <div><label>School Year</label><input type="text" id="set-school-year" class="inp" placeholder="2024–2025 Academic Year" /></div>
+            <button class="btn btn-teal w-full" onclick="saveSettings('links')">Save Links</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  MODALS -->
+<!-- ============================================================ -->
+<div id="modal-att" class="hidden">
+  <div class="modal-bg" onclick="closeModal('modal-att')">
+    <div class="modal-box p-6" onclick="event.stopPropagation()">
+      <div class="font-display text-teal-accent tracking-wide text-lg mb-4">Attendance Details</div>
+      <div id="modal-att-content" class="text-silver text-sm space-y-2 mb-5"></div>
+      <div>
+        <label>Admin Notes</label>
+        <textarea id="modal-att-notes" class="inp" rows="3"></textarea>
+      </div>
+      <div class="flex gap-3 mt-4">
+        <button class="btn btn-green flex-1" onclick="approveAttendance()">✓ Approve</button>
+        <button class="btn btn-red flex-1" onclick="denyAttendance()">✗ Deny</button>
+        <button class="btn btn-navy" onclick="closeModal('modal-att')">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="modal-img" class="hidden">
+  <div class="modal-bg" onclick="closeModal('modal-img')">
+    <div class="modal-box p-4 max-w-2xl" onclick="event.stopPropagation()">
+      <img id="modal-img-src" src="" alt="" class="w-full rounded" />
+      <div id="modal-img-cap" class="text-silver text-sm mt-3 text-center"></div>
+      <button class="btn btn-navy w-full mt-3" onclick="closeModal('modal-img')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  MAIN JS -->
+<!-- ============================================================ -->
+<script>
+  // === State ===
+  let currentUser = null;
+  let currentUserData = null;
+  let currentAdminTab = 'dashboard';
+  let currentUserTab = 'pending';
+  let editingPageId = null;
+  let reviewingAttId = null;
+  let FB = null;
+
+  // === Wait for Firebase ===
+  function waitForFB(cb) {
+    if (window.__firebase) { FB = window.__firebase; cb(); }
+    else setTimeout(() => waitForFB(cb), 100);
+  }
+
+  // === Toast ===
+  function toast(msg, type='info') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.style.background = type === 'error' ? '#7f1d1d' : type === 'success' ? '#14532d' : '#0d6e6e';
+    el.classList.add('show');
+    setTimeout(() => el.classList.remove('show'), 3000);
+  }
+
+  // === Navigation ===
+  function navigate(view) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const el = document.getElementById('view-' + view);
+    if (el) { el.classList.add('active'); window.scrollTo(0,0); }
+  }
+
+  function loadPage(slug) {
+    navigate('page');
+    const content = document.getElementById('page-content');
+    content.innerHTML = '<div class="text-silver text-sm">Loading...</div>';
+    if (!FB) return;
+    const { db, collection, query, where, getDocs } = FB;
+    getDocs(query(collection(db, 'pages'), where('slug','==',slug))).then(snap => {
+      if (snap.empty) { content.innerHTML = '<div class="text-silver">Page not found.</div>'; return; }
+      const page = snap.docs[0].data();
+      content.innerHTML = `
+        <div class="section-title mb-1">${page.title || slug}</div>
+        <div class="section-line mb-6"></div>
+        <div class="rich-content text-silver leading-relaxed">${page.content || '<p>No content yet.</p>'}</div>
+      `;
+    });
+  }
+
+  function openPortal() {
+    if (!currentUserData) return;
+    if (currentUserData.role === 'admin' || currentUserData.role === 'owner') navigate('admin');
+    else if (currentUserData.role === 'teacher') navigate('teacher');
+  }
+
+  function toggleMobileMenu() {
+    document.getElementById('mobile-menu').classList.toggle('open');
+  }
+
+  // === Auth Tab Switch ===
+  function switchAuthTab(tab) {
+    document.getElementById('auth-signin').classList.toggle('hidden', tab !== 'signin');
+    document.getElementById('auth-signup').classList.toggle('hidden', tab !== 'signup');
+    document.getElementById('tab-signin').classList.toggle('active', tab === 'signin');
+    document.getElementById('tab-signup').classList.toggle('active', tab === 'signup');
+  }
+
+  // === Login / Signup ===
+  async function doLogin() {
+    if (!FB) return;
+    const email = document.getElementById('login-email').value.trim();
+    const pass = document.getElementById('login-pass').value;
+    const errEl = document.getElementById('login-error');
+    errEl.classList.add('hidden');
+    try {
+      await FB.signInWithEmailAndPassword(FB.auth, email, pass);
+    } catch(e) {
+      errEl.textContent = e.message; errEl.classList.remove('hidden');
+    }
+  }
+
+  async function doSignup() {
+    if (!FB) return;
+    const name = document.getElementById('signup-name').value.trim();
+    const email = document.getElementById('signup-email').value.trim();
+    const pass = document.getElementById('signup-pass').value;
+    const role = document.getElementById('signup-role').value;
+    const errEl = document.getElementById('signup-error');
+    const okEl = document.getElementById('signup-success');
+    errEl.classList.add('hidden'); okEl.classList.add('hidden');
+    if (!name || !email || !pass) { errEl.textContent = 'All fields required.'; errEl.classList.remove('hidden'); return; }
+    try {
+      const cred = await FB.createUserWithEmailAndPassword(FB.auth, email, pass);
+      await FB.setDoc(FB.doc(FB.db, 'users', cred.user.uid), {
+        name, email, role: 'pending_' + role, status: 'pending',
+        requestedRole: role, createdAt: FB.serverTimestamp()
+      });
+      okEl.classList.remove('hidden');
+      await FB.signOut(FB.auth);
+    } catch(e) {
+      errEl.textContent = e.message; errEl.classList.remove('hidden');
+    }
+  }
+
+  async function doLogout() {
+    if (!FB) return;
+    await FB.signOut(FB.auth);
+    currentUser = null; currentUserData = null;
+    navigate('home');
+    updateNav();
+  }
+
+  // === Auth state ===
+  function initAuth() {
+    FB.onAuthStateChanged(FB.auth, async user => {
+      currentUser = user;
+      if (user) {
+        const snap = await FB.getDoc(FB.doc(FB.db, 'users', user.uid));
+        if (snap.exists()) {
+          currentUserData = snap.data();
+          if (currentUserData.status === 'pending') {
+            toast('Your account is pending admin approval.', 'info');
+            await FB.signOut(FB.auth); currentUser = null; currentUserData = null;
+          } else if (currentUserData.status === 'denied') {
+            toast('Your account request was denied.', 'error');
+            await FB.signOut(FB.auth); currentUser = null; currentUserData = null;
+          } else {
+            updateNav();
+            if (currentUserData.role === 'admin' || currentUserData.role === 'owner') {
+              navigate('admin'); loadAdminDashboard();
+            } else if (currentUserData.role === 'teacher') {
+              navigate('teacher'); loadTeacherPortal();
+            }
+          }
+        }
+      } else {
+        updateNav();
+      }
+    });
+  }
+
+  function updateNav() {
+    const loginBtn = document.getElementById('nav-login-btn');
+    const portalBtn = document.getElementById('nav-portal-btn');
+    const logoutBtn = document.getElementById('nav-logout-btn');
+    const userNameEl = document.getElementById('nav-user-name');
+    const mobileLogin = document.getElementById('mobile-login-link');
+    if (currentUser && currentUserData && currentUserData.status === 'approved') {
+      loginBtn.classList.add('hidden');
+      portalBtn.classList.remove('hidden');
+      logoutBtn.classList.remove('hidden');
+      userNameEl.classList.remove('hidden');
+      userNameEl.textContent = currentUserData.name || currentUser.email;
+      if (mobileLogin) mobileLogin.classList.add('hidden');
+    } else {
+      loginBtn.classList.remove('hidden');
+      portalBtn.classList.add('hidden');
+      logoutBtn.classList.add('hidden');
+      userNameEl.classList.add('hidden');
+      if (mobileLogin) mobileLogin.classList.remove('hidden');
+    }
+  }
+
+  // === Load public home content ===
+  async function loadHomeContent() {
+    if (!FB) return;
+    const { db, collection, getDocs, query, orderBy, where, getDoc, doc } = FB;
+
+    // Settings
+    try {
+      const sets = await getDoc(doc(db, 'settings', 'site'));
+      if (sets.exists()) {
+        const d = sets.data();
+        if (d.heroTitle) document.getElementById('hero-title').innerHTML = d.heroTitle.replace('\n','<br>');
+        if (d.heroSubtitle) document.getElementById('hero-subtitle').textContent = d.heroSubtitle;
+        if (d.heroTagline) document.getElementById('hero-tagline').textContent = d.heroTagline;
+        if (d.s1v) document.getElementById('stat-1-val').textContent = d.s1v;
+        if (d.s1l) document.getElementById('stat-1-label').textContent = d.s1l;
+        if (d.s2v) document.getElementById('stat-2-val').textContent = d.s2v;
+        if (d.s2l) document.getElementById('stat-2-label').textContent = d.s2l;
+        if (d.s3v) document.getElementById('stat-3-val').textContent = d.s3v;
+        if (d.s3l) document.getElementById('stat-3-label').textContent = d.s3l;
+        if (d.s4v) document.getElementById('stat-4-val').textContent = d.s4v;
+        if (d.s4l) document.getElementById('stat-4-label').textContent = d.s4l;
+        if (d.footerAddr) document.getElementById('footer-address').innerHTML = d.footerAddr;
+        if (d.footerContact) document.getElementById('footer-contact').innerHTML = d.footerContact;
+        if (d.footerCopy) document.getElementById('footer-copy').textContent = d.footerCopy;
+        if (d.schoolYear) document.getElementById('school-year-info').textContent = d.schoolYear;
+        if (d.robloxUrl) {
+          document.getElementById('roblox-card').classList.remove('hidden');
+          document.getElementById('roblox-link').href = d.robloxUrl;
+          if (d.robloxDesc) document.getElementById('roblox-desc').textContent = d.robloxDesc;
+        }
+        if (d.trelloUrl) {
+          document.getElementById('trello-card').classList.remove('hidden');
+          document.getElementById('trello-link').href = d.trelloUrl;
+        }
+      }
+    } catch(e) {}
+
+    // Announcements ticker
+    try {
+      const annSnap = await getDocs(query(collection(db, 'announcements'), orderBy('createdAt','desc')));
+      const anns = [];
+      annSnap.forEach(d => { const a = d.data(); if (!a.expiry || new Date(a.expiry) >= new Date()) anns.push(a); });
+      const tickerEl = document.getElementById('ticker-text');
+      if (anns.length) {
+        tickerEl.textContent = anns.map(a => `🔹 ${a.title}: ${a.body}`).join('    ');
+      } else {
+        tickerEl.textContent = '🔹 Welcome to Lamoille High School – Home of the Raiders!';
+      }
+      // Announcement cards
+      const annList = document.getElementById('announcements-list');
+      if (anns.length) {
+        annList.innerHTML = anns.slice(0,5).map(a => `
+          <div class="card p-4">
+            <div class="flex items-start gap-3">
+              <div class="badge ${a.type==='urgent'?'badge-red':a.type==='event'?'badge-teal':'badge-silver'} mt-0.5">${a.type||'info'}</div>
+              <div>
+                <div class="font-display text-silver-light text-sm tracking-wide">${a.title}</div>
+                <div class="text-silver text-sm mt-1">${a.body}</div>
+              </div>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        annList.innerHTML = '<div class="text-silver text-sm">No current announcements.</div>';
+      }
+    } catch(e) { document.getElementById('announcements-list').innerHTML = '<div class="text-silver text-sm">No announcements.</div>'; }
+
+    // Events
+    try {
+      const evSnap = await getDocs(query(collection(db, 'events'), orderBy('date','asc')));
+      const evList = document.getElementById('events-list');
+      const evs = [];
+      evSnap.forEach(d => { const e = d.data(); if (e.date >= new Date().toISOString().split('T')[0]) evs.push(e); });
+      if (evs.length) {
+        evList.innerHTML = evs.slice(0,5).map(e => `
+          <div class="card p-4 flex gap-4">
+            <div class="bg-teal/20 border border-teal/30 rounded p-3 text-center min-w-16 flex-shrink-0">
+              <div class="font-display text-teal-accent text-xs">${monthAbbr(e.date)}</div>
+              <div class="font-display text-2xl text-silver-light leading-tight">${dayNum(e.date)}</div>
+            </div>
+            <div>
+              <div class="font-display text-silver-light tracking-wide">${e.name}</div>
+              <div class="text-silver text-xs mt-1">${e.time || ''} ${e.location ? '· '+e.location : ''}</div>
+              <div class="text-silver text-sm mt-1">${e.description || ''}</div>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        evList.innerHTML = '<div class="text-silver text-sm">No upcoming events.</div>';
+      }
+    } catch(e) { document.getElementById('events-list').innerHTML = '<div class="text-silver text-sm">No events.</div>'; }
+
+    // News
+    try {
+      const nSnap = await getDocs(query(collection(db, 'news'), orderBy('createdAt','desc')));
+      const newsList = document.getElementById('news-list');
+      const posts = [];
+      nSnap.forEach(d => posts.push({id:d.id,...d.data()}));
+      if (posts.length) {
+        newsList.innerHTML = posts.slice(0,4).map(p => `
+          <div class="card overflow-hidden">
+            ${p.imageUrl ? `<img src="${p.imageUrl}" alt="" class="w-full h-32 object-cover" onerror="this.remove()" />` : ''}
+            <div class="p-4">
+              <div class="badge badge-teal mb-2">${p.category||'General'}</div>
+              <div class="font-display text-silver-light text-sm tracking-wide leading-snug">${p.title}</div>
+              <div class="text-silver text-xs mt-2 line-clamp-3">${stripTags(p.body)}</div>
+            </div>
+          </div>
+        `).join('');
+      } else {
+        newsList.innerHTML = '<div class="text-silver text-sm">No news posts yet.</div>';
+      }
+    } catch(e) {}
+
+    // Gallery preview
+    try {
+      const gSnap = await getDocs(query(collection(db, 'gallery'), orderBy('createdAt','desc')));
+      const galEl = document.getElementById('gallery-preview');
+      const photos = [];
+      gSnap.forEach(d => photos.push({id:d.id,...d.data()}));
+      if (photos.length) {
+        galEl.innerHTML = photos.slice(0,8).map(p => `
+          <img src="${p.url}" alt="${p.caption||''}" class="gallery-img" onclick="openImgModal('${p.url}','${(p.caption||'').replace(/'/g,"&#39;")}')" />
+        `).join('');
+      } else {
+        galEl.innerHTML = '<div class="text-silver text-sm col-span-4">No photos yet.</div>';
+      }
+    } catch(e) {}
+
+    // Dynamic pages in nav
+    try {
+      const pSnap = await getDocs(query(collection(db, 'pages'), where('showInNav','==','yes')));
+      const links = [];
+      pSnap.forEach(d => { const p = d.data(); links.push({slug:p.slug,title:p.title}); });
+      // These pages override built-in ones if same slug; just populate extras
+      const builtIn = ['athletics','clubs','departments','staff','news','gallery'];
+      const extras = links.filter(l => !builtIn.includes(l.slug));
+      document.getElementById('extra-nav-links').innerHTML = extras.map(l =>
+        `<span class="nav-link" onclick="loadPage('${l.slug}')">${l.title}</span>`
+      ).join('');
+      document.getElementById('mobile-extra-nav').innerHTML = extras.map(l =>
+        `<span class="nav-link block" onclick="loadPage('${l.slug}');toggleMobileMenu()">${l.title}</span>`
+      ).join('');
+    } catch(e) {}
+
+    // Wire up built-in page links
+    document.querySelectorAll('[data-page-link]').forEach(el => {
+      el.addEventListener('click', () => loadPage(el.getAttribute('data-page-link')));
+    });
+  }
+
+  // === Admin ===
+  function showAdminTab(tab) {
+    document.querySelectorAll('.admin-tab').forEach(t => t.classList.add('hidden'));
+    document.querySelectorAll('.sidebar-link').forEach(l => l.classList.remove('active'));
+    const el = document.getElementById('atab-' + tab);
+    if (el) el.classList.remove('hidden');
+    const sl = document.getElementById('stab-' + tab);
+    if (sl) sl.classList.add('active');
+    currentAdminTab = tab;
+
+    if (tab === 'dashboard') loadAdminDashboard();
+    else if (tab === 'users') loadAdminUsers();
+    else if (tab === 'attendance') loadAdminAttendance();
+    else if (tab === 'announcements') loadAdminAnnouncements();
+    else if (tab === 'events') loadAdminEvents();
+    else if (tab === 'news') loadAdminNews();
+    else if (tab === 'pages') loadAdminPages();
+    else if (tab === 'gallery') loadAdminGallery();
+    else if (tab === 'staff') loadAdminStaff();
+    else if (tab === 'settings') loadAdminSettings();
+  }
+
+  async function loadAdminDashboard() {
+    if (!FB || !currentUserData) return;
+    const { db, collection, getDocs, query, where } = FB;
+    try {
+      const [users, pending, att, news] = await Promise.all([
+        getDocs(collection(db,'users')),
+        getDocs(query(collection(db,'users'),where('status','==','pending'))),
+        getDocs(collection(db,'attendance')),
+        getDocs(collection(db,'news'))
+      ]);
+      document.getElementById('dash-users').textContent = users.size;
+      document.getElementById('dash-pending').textContent = pending.size;
+      document.getElementById('dash-attendance').textContent = att.size;
+      document.getElementById('dash-news').textContent = news.size;
+      const act = [];
+      att.forEach(d => { const a = d.data(); act.push(`📋 ${a.teacherName} submitted attendance for ${a.session} on ${a.date}`); });
+      document.getElementById('dash-activity').innerHTML = act.slice(0,5).map(a=>`<div class="py-1 border-b border-teal/10 text-sm">${a}</div>`).join('') || '<div class="text-sm">No recent activity.</div>';
+    } catch(e) {}
+  }
+
+  async function loadAdminUsers() {
+    if (!FB) return;
+    const { db, collection, getDocs, query, where } = FB;
+    let q;
+    if (currentUserTab === 'pending') q = query(collection(db,'users'), where('status','==','pending'));
+    else if (currentUserTab === 'active') q = query(collection(db,'users'), where('status','==','approved'));
+    else q = collection(db,'users');
+    const snap = await getDocs(q);
+    const rows = [];
+    snap.forEach(d => rows.push({id:d.id,...d.data()}));
+    const tbody = document.getElementById('users-table-body');
+    tbody.innerHTML = rows.map(u => `
+      <tr>
+        <td>${u.name||'—'}</td>
+        <td class="text-xs">${u.email||''}</td>
+        <td><span class="badge ${u.role==='admin'||u.role==='owner'?'badge-blue':u.role==='teacher'?'badge-teal':'badge-yellow'}">${u.role||'pending'}</span></td>
+        <td><span class="badge ${u.status==='approved'?'badge-green':u.status==='denied'?'badge-red':'badge-yellow'}">${u.status||'pending'}</span></td>
+        <td class="space-x-1">
+          ${u.status!=='approved'?`<button class="btn btn-green text-xs py-0.5 px-2" onclick="approveUser('${u.id}','${u.requestedRole||'teacher'}')">Approve</button>`:''}
+          ${u.status!=='denied'?`<button class="btn btn-red text-xs py-0.5 px-2" onclick="denyUser('${u.id}')">Deny</button>`:''}
+          ${u.status==='approved'&&u.role!=='admin'?`<button class="btn btn-navy text-xs py-0.5 px-2" onclick="promoteUser('${u.id}')">→Admin</button>`:''}
+          ${u.status==='approved'&&u.role!=='teacher'&&u.role!=='admin'&&u.role!=='owner'?`<button class="btn btn-navy text-xs py-0.5 px-2" onclick="setTeacher('${u.id}')">→Teacher</button>`:''}
+        </td>
+      </tr>
+    `).join('') || '<tr><td colspan="5" class="text-center text-silver">No users.</td></tr>';
+  }
+
+  async function approveUser(uid, role) {
+    if (!FB) return;
+    await FB.updateDoc(FB.doc(FB.db,'users',uid), { status:'approved', role: role||'teacher' });
+    toast('User approved!', 'success'); loadAdminUsers();
+  }
+  async function denyUser(uid) {
+    if (!FB) return;
+    await FB.updateDoc(FB.doc(FB.db,'users',uid), { status:'denied' });
+    toast('User denied.', 'error'); loadAdminUsers();
+  }
+  async function promoteUser(uid) {
+    if (!FB) return;
+    await FB.updateDoc(FB.doc(FB.db,'users',uid), { role:'admin' });
+    toast('User promoted to admin.', 'success'); loadAdminUsers();
+  }
+  async function setTeacher(uid) {
+    if (!FB) return;
+    await FB.updateDoc(FB.doc(FB.db,'users',uid), { role:'teacher' });
+    toast('Role set to teacher.', 'success'); loadAdminUsers();
+  }
+
+  function switchUserTab(tab) {
+    ['pending','active','all'].forEach(t => {
+      document.getElementById('utab-'+t).classList.toggle('active', t===tab);
+    });
+    currentUserTab = tab; loadAdminUsers();
+  }
+
+  async function loadAdminAttendance() {
+    if (!FB) return;
+    const { db, collection, getDocs, query, orderBy } = FB;
+    const snap = await getDocs(query(collection(db,'attendance'), orderBy('createdAt','desc')));
+    const records = [];
+    snap.forEach(d => records.push({id:d.id,...d.data()}));
+    const tf = document.getElementById('att-filter-teacher').value.toLowerCase();
+    const df = document.getElementById('att-filter-date').value;
+    const filtered = records.filter(r =>
+      (!tf || (r.teacherName||'').toLowerCase().includes(tf)) &&
+      (!df || r.date === df)
+    );
+    const tbody = document.getElementById('att-table-body');
+    tbody.innerHTML = filtered.map(r => `
+      <tr>
+        <td>${r.teacherName||'—'}</td>
+        <td>${r.session||'—'}</td>
+        <td>${r.date||'—'}</td>
+        <td>${r.time||'—'}</td>
+        <td><span class="badge ${r.status==='approved'?'badge-green':r.status==='denied'?'badge-red':'badge-yellow'}">${r.status||'pending'}</span></td>
+        <td><button class="btn btn-navy text-xs py-0.5 px-2" onclick="openAttModal('${r.id}')">Review</button></td>
+      </tr>
+    `).join('') || '<tr><td colspan="6" class="text-center text-silver">No records.</td></tr>';
+  }
+
+  async function openAttModal(id) {
+    reviewingAttId = id;
+    if (!FB) return;
+    const snap = await FB.getDoc(FB.doc(FB.db,'attendance',id));
+    const r = snap.data();
+    document.getElementById('modal-att-content').innerHTML = `
+      <div><strong class="text-teal-accent">Teacher:</strong> ${r.teacherName}</div>
+      <div><strong class="text-teal-accent">Session:</strong> ${r.session}</div>
+      <div><strong class="text-teal-accent">Date:</strong> ${r.date} @ ${r.time}</div>
+      <div><strong class="text-teal-accent">Students:</strong> ${r.students||'—'}</div>
+      <div><strong class="text-teal-accent">Notes:</strong> ${r.notes||'—'}</div>
+    `;
+    document.getElementById('modal-att-notes').value = r.adminNotes || '';
+    document.getElementById('modal-att').classList.remove('hidden');
+  }
+
+  async function approveAttendance() {
+    if (!FB || !reviewingAttId) return;
+    const notes = document.getElementById('modal-att-notes').value;
+    await FB.updateDoc(FB.doc(FB.db,'attendance',reviewingAttId), { status:'approved', adminNotes: notes });
+    toast('Approved!', 'success'); closeModal('modal-att'); loadAdminAttendance();
+  }
+  async function denyAttendance() {
+    if (!FB || !reviewingAttId) return;
+    const notes = document.getElementById('modal-att-notes').value;
+    await FB.updateDoc(FB.doc(FB.db,'attendance',reviewingAttId), { status:'denied', adminNotes: notes });
+    toast('Denied.', 'error'); closeModal('modal-att'); loadAdminAttendance();
+  }
+
+  async function loadAdminAnnouncements() {
+    if (!FB) return;
+    const { db, collection, getDocs, query, orderBy, deleteDoc, doc } = FB;
+    const snap = await getDocs(query(collection(db,'announcements'), orderBy('createdAt','desc')));
+    const list = document.getElementById('ann-list');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(a => `
+      <div class="card p-4 flex items-start justify-between gap-3">
+        <div>
+          <div class="flex gap-2 items-center mb-1">
+            <span class="badge badge-teal">${a.type||'info'}</span>
+            <span class="font-display text-silver-light text-sm">${a.title}</span>
+          </div>
+          <div class="text-silver text-xs">${a.body}</div>
+          ${a.expiry?`<div class="text-silver-dark text-xs mt-1">Expires: ${a.expiry}</div>`:''}
+        </div>
+        <button class="btn btn-red text-xs py-0.5 px-2 flex-shrink-0" onclick="deleteItem('announcements','${a.id}','ann-list',loadAdminAnnouncements)">Delete</button>
+      </div>
+    `).join('') || '<div class="text-silver text-sm">No announcements.</div>';
+  }
+
+  async function addAnnouncement() {
+    if (!FB) return;
+    const t = document.getElementById('ann-title').value.trim();
+    const b = document.getElementById('ann-body').value.trim();
+    const tp = document.getElementById('ann-type').value;
+    const ex = document.getElementById('ann-expiry').value;
+    if (!t || !b) { toast('Title and body required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'announcements'), { title:t, body:b, type:tp, expiry:ex||null, createdAt:FB.serverTimestamp() });
+    toast('Announcement posted!', 'success');
+    ['ann-title','ann-body','ann-expiry'].forEach(id => document.getElementById(id).value='');
+    loadAdminAnnouncements();
+  }
+
+  async function loadAdminEvents() {
+    if (!FB) return;
+    const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'events'), FB.orderBy('date','asc')));
+    const list = document.getElementById('ev-list');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(e => `
+      <div class="card p-4 flex items-center justify-between gap-3">
+        <div>
+          <div class="font-display text-silver-light text-sm">${e.name}</div>
+          <div class="text-silver text-xs">${e.date} @ ${e.time||'TBD'} · ${e.location||''}</div>
+          <div class="text-silver text-xs mt-1">${e.description||''}</div>
+        </div>
+        <button class="btn btn-red text-xs py-0.5 px-2 flex-shrink-0" onclick="deleteItem('events','${e.id}','ev-list',loadAdminEvents)">Delete</button>
+      </div>
+    `).join('') || '<div class="text-silver text-sm">No events.</div>';
+  }
+
+  async function addEvent() {
+    if (!FB) return;
+    const name = document.getElementById('ev-name').value.trim();
+    const date = document.getElementById('ev-date').value;
+    const time = document.getElementById('ev-time').value;
+    const loc = document.getElementById('ev-location').value.trim();
+    const desc = document.getElementById('ev-desc').value.trim();
+    const cat = document.getElementById('ev-cat').value;
+    if (!name || !date) { toast('Name and date required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'events'), { name, date, time, location:loc, description:desc, category:cat, createdAt:FB.serverTimestamp() });
+    toast('Event added!', 'success');
+    ['ev-name','ev-date','ev-time','ev-location','ev-desc'].forEach(id => document.getElementById(id).value='');
+    loadAdminEvents();
+  }
+
+  async function loadAdminNews() {
+    if (!FB) return;
+    const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'news'), FB.orderBy('createdAt','desc')));
+    const list = document.getElementById('news-admin-list');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(p => `
+      <div class="card p-4 flex items-start justify-between gap-3">
+        <div>
+          <div class="badge badge-teal mb-1">${p.category||'General'}</div>
+          <div class="font-display text-silver-light text-sm">${p.title}</div>
+          <div class="text-silver text-xs mt-1 line-clamp-2">${stripTags(p.body)}</div>
+        </div>
+        <button class="btn btn-red text-xs py-0.5 px-2 flex-shrink-0" onclick="deleteItem('news','${p.id}','news-admin-list',loadAdminNews)">Delete</button>
+      </div>
+    `).join('') || '<div class="text-silver text-sm">No posts.</div>';
+  }
+
+  async function addNews() {
+    if (!FB) return;
+    const title = document.getElementById('news-title').value.trim();
+    const body = document.getElementById('news-body').value.trim();
+    const img = document.getElementById('news-img').value.trim();
+    const cat = document.getElementById('news-cat').value;
+    if (!title || !body) { toast('Title and content required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'news'), { title, body, imageUrl:img||null, category:cat, createdAt:FB.serverTimestamp() });
+    toast('Post published!', 'success');
+    ['news-title','news-body','news-img'].forEach(id => document.getElementById(id).value='');
+    loadAdminNews();
+  }
+
+  async function loadAdminPages() {
+    if (!FB) return;
+    const snap = await FB.getDocs(FB.collection(FB.db,'pages'));
+    const list = document.getElementById('pages-list');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(p => `
+      <div class="flex items-center justify-between py-1.5 border-b border-teal/10">
+        <div>
+          <span class="text-silver text-sm">${p.title}</span>
+          <span class="text-silver-dark text-xs ml-2">/${p.slug}</span>
+        </div>
+        <button class="btn btn-navy text-xs py-0.5 px-2" onclick="editPage('${p.id}')">Edit</button>
+      </div>
+    `).join('') || '<div class="text-silver text-sm">No pages.</div>';
+  }
+
+  async function createPage() {
+    if (!FB) return;
+    const title = document.getElementById('page-title-new').value.trim();
+    const slug = document.getElementById('page-slug-new').value.trim().toLowerCase().replace(/\s+/g,'-');
+    const nav = document.getElementById('page-nav-new').value;
+    if (!title || !slug) { toast('Title and slug required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'pages'), { title, slug, showInNav:nav, content:'<p>Edit this page content.</p>', createdAt:FB.serverTimestamp() });
+    toast('Page created!', 'success');
+    ['page-title-new','page-slug-new'].forEach(id => document.getElementById(id).value='');
+    loadAdminPages();
+  }
+
+  async function editPage(id) {
+    if (!FB) return;
+    const snap = await FB.getDoc(FB.doc(FB.db,'pages',id));
+    const p = snap.data();
+    editingPageId = id;
+    document.getElementById('page-edit-title').value = p.title||'';
+    document.getElementById('page-edit-content').value = p.content||'';
+    document.getElementById('page-edit-nav').value = p.showInNav||'yes';
+    document.getElementById('no-page-selected').classList.add('hidden');
+    document.getElementById('page-edit-form').classList.remove('hidden');
+  }
+
+  async function savePage() {
+    if (!FB || !editingPageId) return;
+    const title = document.getElementById('page-edit-title').value.trim();
+    const content = document.getElementById('page-edit-content').value;
+    const nav = document.getElementById('page-edit-nav').value;
+    await FB.updateDoc(FB.doc(FB.db,'pages',editingPageId), { title, content, showInNav:nav });
+    toast('Page saved!', 'success'); loadAdminPages();
+  }
+
+  async function deletePage() {
+    if (!FB || !editingPageId) return;
+    if (!confirm('Delete this page?')) return;
+    await FB.deleteDoc(FB.doc(FB.db,'pages',editingPageId));
+    editingPageId = null;
+    document.getElementById('page-edit-form').classList.add('hidden');
+    document.getElementById('no-page-selected').classList.remove('hidden');
+    toast('Page deleted.', 'error'); loadAdminPages();
+  }
+
+  async function loadAdminGallery() {
+    if (!FB) return;
+    const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'gallery'), FB.orderBy('createdAt','desc')));
+    const list = document.getElementById('gal-admin-list');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(p => `
+      <div class="relative group">
+        <img src="${p.url}" alt="${p.caption||''}" class="gallery-img" />
+        <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition flex flex-col items-center justify-center gap-2 rounded-lg">
+          <div class="text-white text-xs text-center px-2">${p.caption||''}</div>
+          <button class="btn btn-red text-xs py-0.5 px-2" onclick="deleteItem('gallery','${p.id}','gal-admin-list',loadAdminGallery)">Delete</button>
+        </div>
+      </div>
+    `).join('') || '<div class="text-silver text-sm col-span-3">No photos.</div>';
+  }
+
+  async function addGalleryPhoto() {
+    if (!FB) return;
+    const url = document.getElementById('gal-url').value.trim();
+    const cap = document.getElementById('gal-caption').value.trim();
+    const cat = document.getElementById('gal-cat').value.trim();
+    if (!url) { toast('Image URL required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'gallery'), { url, caption:cap, category:cat, createdAt:FB.serverTimestamp() });
+    toast('Photo added!', 'success');
+    ['gal-url','gal-caption','gal-cat'].forEach(id => document.getElementById(id).value='');
+    loadAdminGallery();
+  }
+
+  async function loadAdminStaff() {
+    if (!FB) return;
+    const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'staff'), FB.orderBy('name','asc')));
+    const list = document.getElementById('staff-admin-list');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(s => `
+      <div class="card p-3 flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          ${s.photo?`<img src="${s.photo}" class="w-10 h-10 rounded-full object-cover" />`:'<div class="w-10 h-10 rounded-full bg-teal flex items-center justify-center font-display text-white text-sm">${(s.name||'?')[0]}</div>'}
+          <div>
+            <div class="font-display text-silver-light text-sm">${s.name}</div>
+            <div class="text-silver text-xs">${s.title||''} · ${s.department||''}</div>
+          </div>
+        </div>
+        <button class="btn btn-red text-xs py-0.5 px-2" onclick="deleteItem('staff','${s.id}','staff-admin-list',loadAdminStaff)">Delete</button>
+      </div>
+    `).join('') || '<div class="text-silver text-sm">No staff members.</div>';
+  }
+
+  async function addStaffMember() {
+    if (!FB) return;
+    const name = document.getElementById('staff-name').value.trim();
+    const title = document.getElementById('staff-title').value.trim();
+    const dept = document.getElementById('staff-dept').value.trim();
+    const email = document.getElementById('staff-email').value.trim();
+    const phone = document.getElementById('staff-phone').value.trim();
+    const photo = document.getElementById('staff-photo').value.trim();
+    if (!name) { toast('Name required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'staff'), { name, title, department:dept, email, phone, photo, createdAt:FB.serverTimestamp() });
+    toast('Staff member added!', 'success');
+    ['staff-name','staff-title','staff-dept','staff-email','staff-phone','staff-photo'].forEach(id => document.getElementById(id).value='');
+    loadAdminStaff();
+  }
+
+  async function loadAdminSettings() {
+    if (!FB) return;
+    const snap = await FB.getDoc(FB.doc(FB.db,'settings','site'));
+    if (!snap.exists()) return;
+    const d = snap.data();
+    const map = {
+      'set-hero-title':'heroTitle','set-hero-subtitle':'heroSubtitle','set-hero-tagline':'heroTagline',
+      'set-s1v':'s1v','set-s1l':'s1l','set-s2v':'s2v','set-s2l':'s2l',
+      'set-s3v':'s3v','set-s3l':'s3l','set-s4v':'s4v','set-s4l':'s4l',
+      'set-footer-addr':'footerAddr','set-footer-contact':'footerContact','set-footer-copy':'footerCopy',
+      'set-roblox-url':'robloxUrl','set-roblox-desc':'robloxDesc','set-trello-url':'trelloUrl',
+      'set-school-year':'schoolYear'
+    };
+    Object.entries(map).forEach(([elId, key]) => {
+      const el = document.getElementById(elId);
+      if (el && d[key]) el.value = d[key];
+    });
+  }
+
+  async function saveSettings(group) {
+    if (!FB) return;
+    let data = {};
+    if (group === 'hero') {
+      data = { heroTitle: document.getElementById('set-hero-title').value,
+                heroSubtitle: document.getElementById('set-hero-subtitle').value,
+                heroTagline: document.getElementById('set-hero-tagline').value };
+    } else if (group === 'stats') {
+      data = { s1v:document.getElementById('set-s1v').value, s1l:document.getElementById('set-s1l').value,
+                s2v:document.getElementById('set-s2v').value, s2l:document.getElementById('set-s2l').value,
+                s3v:document.getElementById('set-s3v').value, s3l:document.getElementById('set-s3l').value,
+                s4v:document.getElementById('set-s4v').value, s4l:document.getElementById('set-s4l').value };
+    } else if (group === 'footer') {
+      data = { footerAddr:document.getElementById('set-footer-addr').value,
+                footerContact:document.getElementById('set-footer-contact').value,
+                footerCopy:document.getElementById('set-footer-copy').value };
+    } else if (group === 'links') {
+      data = { robloxUrl:document.getElementById('set-roblox-url').value,
+                robloxDesc:document.getElementById('set-roblox-desc').value,
+                trelloUrl:document.getElementById('set-trello-url').value,
+                schoolYear:document.getElementById('set-school-year').value };
+    }
+    await FB.setDoc(FB.doc(FB.db,'settings','site'), data, { merge: true });
+    toast('Settings saved!', 'success');
+    loadHomeContent();
+  }
+
+  async function deleteItem(coll, id, listId, reloadFn) {
+    if (!FB) return;
+    if (!confirm('Delete this item?')) return;
+    await FB.deleteDoc(FB.doc(FB.db, coll, id));
+    toast('Deleted.', 'error');
+    reloadFn();
+  }
+
+  // === Teacher Portal ===
+  async function loadTeacherPortal() {
+    if (!FB || !currentUser || !currentUserData) return;
+    document.getElementById('teacher-welcome').textContent = `Welcome, ${currentUserData.name || currentUser.email}`;
+    // Set defaults
+    const now = new Date();
+    document.getElementById('att-date').value = now.toISOString().split('T')[0];
+    document.getElementById('att-time').value = now.toTimeString().slice(0,5);
+    // Load my submissions
+    const snap = await FB.getDocs(FB.query(
+      FB.collection(FB.db,'attendance'),
+      FB.where('teacherUid','==',currentUser.uid),
+      FB.orderBy('createdAt','desc')
+    ));
+    const list = document.getElementById('teacher-submissions');
+    const items = [];
+    snap.forEach(d => items.push({id:d.id,...d.data()}));
+    list.innerHTML = items.map(r => `
+      <div class="card p-3">
+        <div class="flex items-center justify-between">
+          <div class="font-display text-silver-light text-sm">${r.session}</div>
+          <span class="badge ${r.status==='approved'?'badge-green':r.status==='denied'?'badge-red':'badge-yellow'}">${r.status||'pending'}</span>
+        </div>
+        <div class="text-silver text-xs mt-1">${r.date} @ ${r.time}</div>
+        ${r.adminNotes?`<div class="text-silver-dark text-xs mt-1 italic">Admin: ${r.adminNotes}</div>`:''}
+      </div>
+    `).join('') || '<div class="text-silver text-sm">No submissions yet.</div>';
+  }
+
+  async function submitAttendance() {
+    if (!FB || !currentUser || !currentUserData) return;
+    const session = document.getElementById('att-session').value.trim();
+    const date = document.getElementById('att-date').value;
+    const time = document.getElementById('att-time').value;
+    const students = document.getElementById('att-students').value.trim();
+    const notes = document.getElementById('att-notes').value.trim();
+    if (!session || !date) { toast('Session name and date required.', 'error'); return; }
+    await FB.addDoc(FB.collection(FB.db,'attendance'), {
+      teacherUid: currentUser.uid,
+      teacherName: currentUserData.name || currentUser.email,
+      session, date, time, students, notes,
+      status: 'pending', createdAt: FB.serverTimestamp()
+    });
+    toast('Attendance submitted!', 'success');
+    ['att-session','att-students','att-notes'].forEach(id => document.getElementById(id).value='');
+    loadTeacherPortal();
+  }
+
+  // === Gallery page ===
+  function buildGalleryPage(items) {
+    return `
+      <div class="section-title mb-1">Photo Gallery</div>
+      <div class="section-line mb-6"></div>
+      <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+        ${items.map(p => `
+          <div class="relative group cursor-pointer" onclick="openImgModal('${p.url}','${(p.caption||'').replace(/'/g,"&#39;")}')">
+            <img src="${p.url}" alt="${p.caption||''}" class="gallery-img" />
+            <div class="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 opacity-0 group-hover:opacity-100 transition rounded-b-lg">
+              <div class="text-white text-xs">${p.caption||''}</div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  function buildStaffPage(items) {
+    return `
+      <div class="section-title mb-1">Staff Directory</div>
+      <div class="section-line mb-6"></div>
+      <div class="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
+        ${items.map(s => `
+          <div class="card p-4 flex items-center gap-4">
+            ${s.photo ? `<img src="${s.photo}" class="w-14 h-14 rounded-full object-cover flex-shrink-0" />` :
+              `<div class="w-14 h-14 rounded-full bg-teal flex items-center justify-center font-display text-white text-xl flex-shrink-0">${(s.name||'?')[0]}</div>`}
+            <div>
+              <div class="font-display text-silver-light text-sm">${s.name}</div>
+              <div class="text-teal-accent text-xs">${s.title||''}</div>
+              <div class="text-silver text-xs">${s.department||''}</div>
+              ${s.email?`<div class="text-silver-dark text-xs mt-1">✉️ ${s.email}</div>`:''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `;
+  }
+
+  // === Modals ===
+  function openImgModal(url, cap) {
+    document.getElementById('modal-img-src').src = url;
+    document.getElementById('modal-img-cap').textContent = cap;
+    document.getElementById('modal-img').classList.remove('hidden');
+  }
+  function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+  // === Helpers ===
+  function monthAbbr(dateStr) {
+    if (!dateStr) return '';
+    return ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'][parseInt(dateStr.split('-')[1])-1];
+  }
+  function dayNum(dateStr) { return dateStr ? parseInt(dateStr.split('-')[2]) : ''; }
+  function stripTags(str) { return str ? str.replace(/<[^>]*>/g,'') : ''; }
+  function scrollToSection(id) { document.getElementById(id)?.scrollIntoView({behavior:'smooth'}); }
+
+  // === Override loadPage for built-in pages ===
+  const _origLoadPage = loadPage;
+  window.loadPage = async function(slug) {
+    if (!FB) { _origLoadPage(slug); return; }
+    navigate('page');
+    const content = document.getElementById('page-content');
+    content.innerHTML = '<div class="text-silver text-sm">Loading...</div>';
+
+    // Check for special built-ins
+    if (slug === 'gallery') {
+      const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'gallery'), FB.orderBy('createdAt','desc')));
+      const items = [];
+      snap.forEach(d => items.push({id:d.id,...d.data()}));
+      content.innerHTML = buildGalleryPage(items);
+      return;
+    }
+    if (slug === 'staff') {
+      const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'staff'), FB.orderBy('name','asc')));
+      const items = [];
+      snap.forEach(d => items.push({id:d.id,...d.data()}));
+      content.innerHTML = buildStaffPage(items);
+      return;
+    }
+    if (slug === 'news') {
+      const snap = await FB.getDocs(FB.query(FB.collection(FB.db,'news'), FB.orderBy('createdAt','desc')));
+      const items = [];
+      snap.forEach(d => items.push({id:d.id,...d.data()}));
+      content.innerHTML = `
+        <div class="section-title mb-1">News</div>
+        <div class="section-line mb-6"></div>
+        <div class="grid sm:grid-cols-2 gap-5">
+          ${items.map(p => `
+            <div class="card overflow-hidden">
+              ${p.imageUrl?`<img src="${p.imageUrl}" class="w-full h-40 object-cover" onerror="this.remove()" />`:''}
+              <div class="p-5">
+                <span class="badge badge-teal mb-2">${p.category||'General'}</span>
+                <div class="font-display text-silver-light tracking-wide mb-2">${p.title}</div>
+                <div class="text-silver text-sm leading-relaxed">${p.body}</div>
+              </div>
+            </div>
+          `).join('') || '<div class="text-silver">No posts yet.</div>'}
+        </div>
+      `;
+      return;
+    }
+
+    // Check Firestore for page
+    const pSnap = await FB.getDocs(FB.query(FB.collection(FB.db,'pages'), FB.where('slug','==',slug)));
+    if (!pSnap.empty) {
+      const page = pSnap.docs[0].data();
+      content.innerHTML = `
+        <div class="section-title mb-1">${page.title || slug}</div>
+        <div class="section-line mb-6"></div>
+        <div class="rich-content text-silver leading-relaxed">${page.content || '<p>No content yet.</p>'}</div>
+      `;
+    } else {
+      content.innerHTML = '<div class="text-silver">Page not found.</div>';
+    }
+  };
+
+  // === INIT ===
+  waitForFB(() => {
+    initAuth();
+    navigate('home');
+    loadHomeContent();
+    // Set today's date on att form
+    const attDate = document.getElementById('att-date');
+    if (attDate) attDate.value = new Date().toISOString().split('T')[0];
+  });
+</script>
+</body>
+</html>
