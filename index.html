@@ -1317,9 +1317,16 @@ function MyProfile({ profile, setProfile }) {
   useEffect(() => {
     db.collection('disciplinary').where('userId','==',profile.id).onSnapshot(s=>{let d=s.docs.map(x=>({id:x.id,...x.data()}));d.sort((a,b)=>(b.issuedAt?.toDate?.()?.getTime()||0)-(a.issuedAt?.toDate?.()?.getTime()||0));setWarnings(d);});
     db.collection('commendations').where('userId','==',profile.id).onSnapshot(s=>{let d=s.docs.map(x=>({id:x.id,...x.data()}));d.sort((a,b)=>(b.createdAt?.toDate?.()?.getTime()||0)-(a.createdAt?.toDate?.()?.getTime()||0));setCommendations(d);});
-    // Fetch courses this user is assigned to teach
-    db.collection('courses').where('teacherIds','array-contains',profile.id).get()
-      .then(s => setMyCourses(s.docs.map(d=>({id:d.id,...d.data()}))))
+    // Fetch all courses and filter client-side — avoids array-contains index issues
+    db.collection('courses').get()
+      .then(s => {
+        const all = s.docs.map(d=>({id:d.id,...d.data()}));
+        const mine = all.filter(c => {
+          const ids = c.teacherIds || [];
+          return ids.includes(profile.id);
+        });
+        setMyCourses(mine);
+      })
       .catch(() => setMyCourses([]));
   }, []);
 
@@ -1438,8 +1445,8 @@ function MyProfile({ profile, setProfile }) {
         </div>
       </div>
 
-      {/* My Courses — only shown if this person is assigned to teach any course */}
-      {myCourses.length > 0 && (
+      {/* My Courses — shown for all staff, prominent if assigned */}
+      {(myCourses.length > 0 || profile.rankName?.toLowerCase().includes('instructor')) && (
         <div className="panel" style={{marginTop:'1.25rem'}}>
           <div className="panel-header">
             <div>
@@ -1449,7 +1456,13 @@ function MyProfile({ profile, setProfile }) {
             <span className="badge badge-teal">{myCourses.length} course{myCourses.length!==1?'s':''}</span>
           </div>
           <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:'1rem',padding:'1.25rem'}}>
-            {myCourses.map(c => (
+            {myCourses.length === 0 ? (
+              <div className="empty" style={{gridColumn:'1/-1',padding:'1.5rem'}}>
+                <span className="empty-icon">📚</span>
+                <div className="empty-text">No courses assigned yet</div>
+                <div className="empty-sub">Ask an admin to assign you to a course in Manage Courses</div>
+              </div>
+            ) : myCourses.map(c => (
               <div key={c.id} style={{
                 background: c.type==='core' ? 'linear-gradient(135deg,#f0f4ff,#e8eeff)' : 'linear-gradient(135deg,#f5f0ff,#ede8ff)',
                 border: `1px solid ${c.type==='core' ? '#c5d0f5' : '#d5c8f5'}`,
