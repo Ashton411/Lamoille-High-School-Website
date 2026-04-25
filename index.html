@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/> 
+<meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Lamoille High School — HR Portal</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB2aWV3Qm94PSIwIDAgMTAwIDEwMCIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIxMDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwJSIgc3RvcC1jb2xvcj0iIzFhMzQ3MCIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEwMCUiIHN0b3AtY29sb3I9IiMwZjZlNTYiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSIxMDAiIGhlaWdodD0iMTAwIiBmaWxsPSJ1cmwoI2cpIiByeD0iMTgiLz4KICA8cGF0aCBkPSJNNTAgMTAgTDg0IDI0IEw4NCA1NCBDODQ3MSA2OCA4MiA1MCA5MSBDMzIgODIgMTYgNzEgMTYgNTQgTDE2IDI0IFoiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgyNTUsMjU1LDI1NSwwLjkpIiBzdHJva2Utd2lkdGg9IjMuNSIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgogIDx0ZXh0IHg9IjUwIiB5PSI1OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9Ikdlb3JnaWEsc2VyaWYiIGZvbnQtc2l6ZT0iMjIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSJ3aGl0ZSI+TEhTPC90ZXh0PgogIDxsaW5lIHgxPSIzNCIgeTE9IjY2IiB4Mj0iNjYiIHkyPSI2NiIgc3Ryb2tlPSJyZ2JhKDI5LDE1OCwxMTcsMC45KSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KPC9zdmc+"/>
@@ -4067,7 +4067,10 @@ function ScheduleBuilder({ profile }) {
     const userCourses = courses.filter(c => (c.teacherIds||[]).includes(selectedUser.id));
     const isInstructor = userCourses.length > 0;
 
-    const NON_TEACHING_RE = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
+    const isNonTeachingBell = (name) => {
+      const n = name.toLowerCase().trim();
+      return n==='homeroom'||n.startsWith('lunch')||n.startsWith('after school')||n==='break'||n==='recess'||n==='advisory'||n==='study hall';
+    };
     const map = {};
 
     bellSchedule.forEach(bell => {
@@ -4075,7 +4078,7 @@ function ScheduleBuilder({ profile }) {
       const isLunch = bell.period.toLowerCase().includes('lunch');
       const isHomeroom = bell.period.toLowerCase().includes('homeroom');
       const isAfterSchool = bell.period.toLowerCase().includes('after');
-      const isNonTeaching = isBreak || NON_TEACHING_RE.test(bell.period);
+      const isNonTeaching = isBreak || isNonTeachingBell(bell.period);
 
       if (isNonTeaching) {
         map[bell.period] = {
@@ -4603,7 +4606,21 @@ function ManageCourses({ profile }) {
   const dragOver = useRef(null);
 
   const GRADES = ['9','10','11','12'];
-  const NON_TEACHING_RE = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
+  // Only exclude periods whose names clearly indicate non-teaching time
+  // Use exact word boundaries to avoid accidentally matching "4th" etc.
+  const isNonTeachingPeriod = (name) => {
+    const n = name.toLowerCase().trim();
+    // Only exclude if the WHOLE name is about non-teaching (not just contains a word)
+    return n === 'homeroom' ||
+           n.startsWith('lunch') ||
+           n.startsWith('after school') ||
+           n === 'passing period' ||
+           n === 'break' ||
+           n === 'recess' ||
+           n === 'advisory' ||
+           n === 'study hall' ||
+           n === 'after school';
+  };
 
   useEffect(() => {
     const unsub = db.collection('courses').onSnapshot(s => {
@@ -4614,8 +4631,12 @@ function ManageCourses({ profile }) {
     db.collection('users').onSnapshot(s => setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active')));
     db.collection('settings').doc('bell_schedule').onSnapshot(doc => {
       const raw = (doc.exists && doc.data().periods?.length) ? doc.data().periods : BELL_SCHEDULE;
-      const teaching = raw.filter(b => b.type !== 'break' && !NON_TEACHING_RE.test(b.period)).map(b => b.period);
-      setBellPeriods(teaching.length > 0 ? teaching : ['1st Period','2nd Period','3rd Period','4th Period','5th Period','6th Period']);
+      const teaching = raw
+        .filter(b => b.type !== 'break' && !isNonTeachingPeriod(b.period))
+        .map(b => b.period);
+      console.log('[BellSchedule] Raw periods:', raw.map(b=>b.period));
+      console.log('[BellSchedule] Teaching periods after filter:', teaching);
+      setBellPeriods(teaching.length > 0 ? teaching : raw.map(b=>b.period));
     });
     return unsub;
   }, []);
@@ -4668,8 +4689,11 @@ function ManageCourses({ profile }) {
     const bellDoc = await db.collection('settings').doc('bell_schedule').get();
     let bells = BELL_SCHEDULE;
     if (bellDoc.exists && bellDoc.data().periods?.length) bells = bellDoc.data().periods;
-    const NON_TEACHING = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
-    const teachingPeriods = bells.filter(b=>b.type!=='break'&&!NON_TEACHING.test(b.period)).map(b=>b.period);
+    const isNonTeaching = (name) => {
+      const n = name.toLowerCase().trim();
+      return n==='homeroom'||n.startsWith('lunch')||n.startsWith('after school')||n==='break'||n==='recess'||n==='advisory'||n==='study hall'||n==='passing period';
+    };
+    const teachingPeriods = bells.filter(b=>b.type!=='break'&&!isNonTeaching(b.period)).map(b=>b.period);
     console.log('[AutoScheduler] Periods:', teachingPeriods);
     courses.forEach(c=>{
       const g=c.grades?.length>0?c.grades:inferGradesFromName(c.name);
