@@ -4437,211 +4437,267 @@ function ScheduleBuilder({ profile }) {
 }
 // ── Manage Bell Schedule (Admin) ──
 
-function inferGradesFromName(name) {
-  const grades = [];
-  const text = name.toLowerCase();
-  if (/\b9(th)?\b/.test(text))  grades.push('9');
-  if (/\b10(th)?\b/.test(text)) grades.push('10');
-  if (/\b11(th)?\b/.test(text)) grades.push('11');
-  if (/\b12(th)?\b/.test(text)) grades.push('12');
-  if (/freshman/.test(text))    grades.push('9');
-  if (/sophomore/.test(text))   grades.push('10');
-  if (/junior/.test(text))      grades.push('11');
-  if (/senior/.test(text))      grades.push('12');
-  if (/\bap\b|advanced/.test(text) && grades.length === 0) grades.push('11','12');
-  if (/honor/.test(text) && grades.length === 0) grades.push('10','11','12');
-  return [...new Set(grades)];
+
+// ═══════════════════════════════════════════════════════
+// GRADE INFERENCE — knows real HS curriculum
+// ═══════════════════════════════════════════════════════
+function inferGrades(name) {
+  const t = (name||'').toLowerCase();
+  // Explicit numbers
+  if (/\b9(th)?\b/.test(t))  return ['9'];
+  if (/\b10(th)?\b/.test(t)) return ['10'];
+  if (/\b11(th)?\b/.test(t)) return ['11'];
+  if (/\b12(th)?\b/.test(t)) return ['12'];
+  if (/freshman/.test(t))    return ['9'];
+  if (/sophomore/.test(t))   return ['10'];
+  if (/junior/.test(t))      return ['11'];
+  if (/senior/.test(t))      return ['12'];
+  // AP/Advanced/Honors
+  if (/\bap\b|advanced placement/.test(t)) return ['11','12'];
+  if (/\bhonor/.test(t))                   return ['10','11','12'];
+  // English sequence
+  if (/english\s*9|lang.*arts.*9/.test(t)) return ['9'];
+  if (/english\s*10/.test(t))              return ['10'];
+  if (/english\s*11|american lit/.test(t)) return ['11'];
+  if (/english\s*12|brit.*lit|senior eng/.test(t)) return ['12'];
+  if (/creative writ|speech|debate|journalism/.test(t)) return ['10','11','12'];
+  // Math sequence
+  if (/pre.?algebra/.test(t))              return ['9'];
+  if (/algebra\s*1/.test(t))              return ['9','10'];
+  if (/geometry/.test(t))                 return ['10'];
+  if (/algebra\s*2/.test(t))             return ['10','11'];
+  if (/pre.?calc/.test(t))               return ['11','12'];
+  if (/calculus|calc\b/.test(t))         return ['11','12'];
+  if (/statistics|stats/.test(t))        return ['11','12'];
+  if (/personal finance|financial math/.test(t)) return ['12'];
+  // Science
+  if (/earth sci|physical sci|science\s*9/.test(t)) return ['9'];
+  if (/\bbiology\b|\bbio\b/.test(t))     return ['9','10'];
+  if (/chemistry|chem\b/.test(t))        return ['10','11'];
+  if (/\bphysics\b/.test(t))             return ['11','12'];
+  if (/anatomy|physiology/.test(t))      return ['11','12'];
+  if (/health sci/.test(t))              return ['10','11','12'];
+  if (/\bhealth\b/.test(t))             return ['9','10'];
+  // Social Studies
+  if (/world hist|world geo/.test(t))    return ['9'];
+  if (/modern world/.test(t))            return ['10'];
+  if (/us hist|u\.s\. hist|american hist|united states hist/.test(t)) return ['10','11'];
+  if (/government|civics/.test(t))       return ['11','12'];
+  if (/economics|\becon\b/.test(t))      return ['11','12'];
+  if (/psychology|sociology/.test(t))    return ['11','12'];
+  // Languages
+  if (/spanish\s*1|french\s*1|latin\s*1/.test(t)) return ['9','10'];
+  if (/spanish\s*2|french\s*2|latin\s*2/.test(t)) return ['10','11'];
+  if (/spanish\s*3|french\s*3|latin\s*3/.test(t)) return ['11','12'];
+  if (/\bspanish\b|\bfrench\b|\blatin\b|\bgerman\b/.test(t)) return ['9','10','11','12'];
+  // PE/Arts/Electives
+  if (/phys.*ed|p\.e\.|gym/.test(t))    return ['9','10','11','12'];
+  if (/\bart\s*1/.test(t))              return ['9','10'];
+  if (/\bart\s*[234]/.test(t))          return ['11','12'];
+  if (/photography|drama|theatre|band|choir|orchestra/.test(t)) return ['9','10','11','12'];
+  if (/culinary|cooking/.test(t))       return ['10','11','12'];
+  if (/finance\b/.test(t))              return ['11','12'];
+  if (/computer sci|coding|programming/.test(t)) return ['9','10','11','12'];
+  return []; // unknown — caller handles fallback
 }
 
-function autoScheduleCourses(courses, availablePeriods) {
-  // ─────────────────────────────────────────────────────────────────
-  // MODEL (matches the LHS bell schedule image):
-  //   • Each period has exactly ONE slot per grade (9/10/11/12)
-  //   • A grade's slot for a period = one course
-  //   • Same teacher can't teach two classes in the same period
-  //   • A course with grades [9] only occupies the grade-9 slot
-  //   • A course with grades [9,10] occupies BOTH the grade-9 AND grade-10 slot
-  //     in the same period (co-taught / combined class)
-  //
-  // ALGORITHM: greedy CSP with backtracking
-  //   1. Infer grades from name if not set
-  //   2. Sort by most-constrained first (single-grade courses first,
-  //      then fewest-teacher courses — they have the least flexibility)
-  //   3. For each course, find valid periods where:
-  //        - no teacher conflict
-  //        - no grade-slot already taken
-  //   4. Assign to least-loaded valid period; backtrack if stuck
-  //   5. Courses that truly can't fit are returned as conflicts
-  // ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// AUTO-SCHEDULER
+// Grid model: periods × grades, one course per cell
+// Each course gets ONE cell (one period + one grade)
+// ═══════════════════════════════════════════════════════
+function autoSchedule(courses, periods) {
+  const GRADES = ['9','10','11','12'];
 
-  const ALL_GRADES = ['9','10','11','12'];
+  // Every course can go in any grade column and any period
+  // Only constraints: no teacher teaches two classes at the same time
+  //                   spread evenly across grades and periods
+  const gradeLoad  = {}; GRADES.forEach(g => gradeLoad[g] = 0);
+  const teacherSlot = {};
+  const periodLoad  = {}; periods.forEach(p => periodLoad[p] = 0);
+  const assigned    = [];
+  const conflicts   = [];
 
-  // Step 1: enrich — infer grades from name
-  const enriched = courses.map(c => {
-    let grades = (c.grades && c.grades.length > 0) ? [...c.grades] : inferGradesFromName(c.name);
-    // Single-grade name inference: "English 9" → ['9'], not ['9','10','11','12']
-    // Only fall back to all-grades if truly no indicator at all
-    if (grades.length === 0) grades = [...ALL_GRADES];
-    return { ...c, grades };
-  });
+  function place(i) {
+    if (i === courses.length) return true;
+    const c = courses[i];
 
-  // Step 2: sort — most constrained first
-  // Most constrained = single grade (conflicts with more other single-grade courses)
-  //                  + fewer teachers (less flexibility in assignment)
-  const sorted = [...enriched].sort((a, b) => {
-    const gradeDiff = a.grades.length - b.grades.length;
-    if (gradeDiff !== 0) return gradeDiff; // single-grade first
-    return (a.teacherIds||[]).length - (b.teacherIds||[]).length; // fewer teachers first
-  });
-
-  const assigned = [];
-  const conflicts = [];
-
-  // State: immutable maps passed through recursion for clean backtracking
-  // gradeSlots[grade][period] = true  → that grade's period slot is taken
-  // teacherSlots[teacherId][period] = true → teacher busy that period
-  const initGradeSlots = () => {
-    const m = {};
-    ALL_GRADES.forEach(g => { m[g] = {}; });
-    return m;
-  };
-  const initTeacherSlots = () => ({});
-  const initPeriodLoad = () => {
-    const m = {};
-    availablePeriods.forEach(p => { m[p] = 0; });
-    return m;
-  };
-
-  function cloneGradeSlots(gs) {
-    const m = {};
-    ALL_GRADES.forEach(g => { m[g] = { ...gs[g] }; });
-    return m;
-  }
-
-  function tryAssign(idx, gradeSlots, teacherSlots, periodLoad) {
-    if (idx === sorted.length) return true;
-
-    const course = sorted[idx];
-    const teachers = course.teacherIds || [];
-    const grades = course.grades;
-
-    // Valid periods: none of this course's grades are taken AND no teacher conflict
-    const validPeriods = availablePeriods.filter(period => {
-      // Teacher conflict check
-      for (const tid of teachers) {
-        if (teacherSlots[tid] && teacherSlots[tid][period]) return false;
+    // Build all valid (period, grade) options
+    const opts = [];
+    for (const p of periods) {
+      if ((c.teacherIds||[]).some(tid => teacherSlot[tid]?.[p])) continue;
+      for (const g of GRADES) {
+        opts.push({p, g});
       }
-      // Grade slot conflict check — ALL grades this course needs must be free
-      for (const g of grades) {
-        if (gradeSlots[g] && gradeSlots[g][period]) return false;
-      }
-      return true;
+    }
+
+    if (opts.length === 0) { conflicts.push(c.name); return place(i+1); }
+
+    // Prefer: least-loaded period first, then least-loaded grade
+    opts.sort((a,b) => {
+      const pd = periodLoad[a.p] - periodLoad[b.p];
+      if (pd !== 0) return pd;
+      return gradeLoad[a.g] - gradeLoad[b.g];
     });
 
-    if (validPeriods.length === 0) {
-      // Truly can't schedule — record conflict, skip, keep going
-      conflicts.push(course.name);
-      return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
-    }
-
-    // Try periods in order of least load (spread the schedule evenly)
-    const ordered = [...validPeriods].sort((a, b) => (periodLoad[a]||0) - (periodLoad[b]||0));
-
-    for (const period of ordered) {
-      // Clone state for this branch
-      const newGradeSlots = cloneGradeSlots(gradeSlots);
-      const newTeacherSlots = { ...teacherSlots };
-      const newPeriodLoad = { ...periodLoad };
-
-      // Mark grade slots
-      for (const g of grades) {
-        newGradeSlots[g][period] = true;
-      }
-      // Mark teacher slots
-      for (const tid of teachers) {
-        newTeacherSlots[tid] = { ...(newTeacherSlots[tid]||{}), [period]: true };
-      }
-      newPeriodLoad[period] = (newPeriodLoad[period]||0) + 1;
-
-      assigned.push({ ...course, period });
-      if (tryAssign(idx + 1, newGradeSlots, newTeacherSlots, newPeriodLoad)) return true;
-
-      // Backtrack
+    for (const {p, g} of opts) {
+      (c.teacherIds||[]).forEach(tid => { if (!teacherSlot[tid]) teacherSlot[tid] = {}; teacherSlot[tid][p] = true; });
+      periodLoad[p]++; gradeLoad[g]++;
+      assigned.push({...c, period: p, grades: [g]});
+      if (place(i+1)) return true;
       assigned.pop();
+      (c.teacherIds||[]).forEach(tid => { if (teacherSlot[tid]) delete teacherSlot[tid][p]; });
+      periodLoad[p]--; gradeLoad[g]--;
     }
 
-    // All periods failed — conflict
-    conflicts.push(course.name);
-    return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
+    conflicts.push(c.name); return place(i+1);
   }
 
-  tryAssign(0, initGradeSlots(), initTeacherSlots(), initPeriodLoad());
-
-  // Deduplicate conflicts (course may have been pushed multiple times on backtrack)
-  const uniqueConflicts = [...new Set(conflicts)];
-  // Remove any that ended up assigned via a later branch
-  const assignedIds = new Set(assigned.map(c => c.id));
-  const finalConflicts = uniqueConflicts.filter(name => !assigned.find(c => c.name === name));
-
-  return { assigned, conflicts: finalConflicts };
+  place(0);
+  const assignedNames = new Set(assigned.map(c=>c.name));
+  return { assigned, conflicts: [...new Set(conflicts)].filter(n=>!assignedNames.has(n)) };
 }
 
+// ═══════════════════════════════════════════════════════
+// MANAGE COURSES — 3 tabs: Visual Grid | Course List | Auto-Schedule
+// ═══════════════════════════════════════════════════════
+const GRADE_COLORS = {'9':'#3b82f6','10':'#8b5cf6','11':'#ec4899','12':'#f59e0b'};
+const GRADES_ALL   = ['9','10','11','12'];
 
-// ── Course scheduler constants ──
-const GRADE_COLORS = { '9':'#3b82f6','10':'#8b5cf6','11':'#ec4899','12':'#f59e0b' };
-const TYPE_ICON = { core:'✏️', elective:'🎨' };
+// ── Lamoille High School Official Curriculum ──
+const LHS_CURRICULUM = [
+  // ENGLISH
+  {name:'English 9',             type:'core',     grades:['9'],            dept:'English'},
+  {name:'English 10',            type:'core',     grades:['10'],           dept:'English'},
+  {name:'English 11',            type:'core',     grades:['11'],           dept:'English'},
+  {name:'English 12',            type:'core',     grades:['12'],           dept:'English'},
+  {name:'Creative Writing',      type:'elective', grades:['11','12'],      dept:'English'},
+  {name:'Speech & Debate',       type:'elective', grades:['10','11','12'], dept:'English'},
+  // MATH
+  {name:'Algebra 1',             type:'core',     grades:['9'],            dept:'Math'},
+  {name:'Geometry',              type:'core',     grades:['10'],           dept:'Math'},
+  {name:'Algebra 2',             type:'core',     grades:['11'],           dept:'Math'},
+  {name:'Pre-Calculus',          type:'core',     grades:['12'],           dept:'Math'},
+  {name:'Statistics',            type:'elective', grades:['11','12'],      dept:'Math'},
+  // SCIENCE
+  {name:'Earth Science',         type:'core',     grades:['9'],            dept:'Science'},
+  {name:'Biology',               type:'core',     grades:['10'],           dept:'Science'},
+  {name:'Chemistry',             type:'core',     grades:['11'],           dept:'Science'},
+  {name:'Physics',               type:'core',     grades:['12'],           dept:'Science'},
+  {name:'Anatomy & Physiology',  type:'elective', grades:['11','12'],      dept:'Science'},
+  {name:'Environmental Science', type:'elective', grades:['11','12'],      dept:'Science'},
+  // SOCIAL STUDIES
+  {name:'World History',         type:'core',     grades:['9'],            dept:'Social Studies'},
+  {name:'U.S. History',          type:'core',     grades:['10'],           dept:'Social Studies'},
+  {name:'U.S. Government',       type:'core',     grades:['11'],           dept:'Social Studies'},
+  {name:'Economics',             type:'core',     grades:['12'],           dept:'Social Studies'},
+  {name:'Psychology',            type:'elective', grades:['11','12'],      dept:'Social Studies'},
+  {name:'Sociology',             type:'elective', grades:['11','12'],      dept:'Social Studies'},
+  // WORLD LANGUAGE
+  {name:'Spanish 1',             type:'core',     grades:['9','10'],       dept:'World Language'},
+  {name:'Spanish 2',             type:'core',     grades:['10','11'],      dept:'World Language'},
+  {name:'Spanish 3',             type:'elective', grades:['11','12'],      dept:'World Language'},
+  {name:'French 1',              type:'core',     grades:['9','10'],       dept:'World Language'},
+  {name:'French 2',              type:'elective', grades:['10','11'],      dept:'World Language'},
+  // PE & HEALTH
+  {name:'Physical Education 9',  type:'core',     grades:['9'],            dept:'PE & Health'},
+  {name:'Physical Education 10', type:'core',     grades:['10'],           dept:'PE & Health'},
+  {name:'Health',                type:'core',     grades:['11'],           dept:'PE & Health'},
+  {name:'Fitness & Wellness',    type:'elective', grades:['12'],           dept:'PE & Health'},
+  // FINE ARTS
+  {name:'Art 1',                 type:'elective', grades:['9','10'],       dept:'Fine Arts'},
+  {name:'Art 2',                 type:'elective', grades:['10','11'],      dept:'Fine Arts'},
+  {name:'Photography',           type:'elective', grades:['10','11','12'], dept:'Fine Arts'},
+  {name:'Drama',                 type:'elective', grades:['9','10','11','12'], dept:'Fine Arts'},
+  {name:'Band',                  type:'elective', grades:['9','10','11','12'], dept:'Fine Arts'},
+  {name:'Chorus',                type:'elective', grades:['9','10','11','12'], dept:'Fine Arts'},
+  // CTE
+  {name:'Culinary Arts 1',       type:'elective', grades:['10','11'],      dept:'CTE'},
+  {name:'Culinary Arts 2',       type:'elective', grades:['11','12'],      dept:'CTE'},
+  {name:'Personal Finance',      type:'elective', grades:['11','12'],      dept:'CTE'},
+  {name:'Business Principles',   type:'elective', grades:['10','11'],      dept:'CTE'},
+  {name:'Computer Science',      type:'elective', grades:['10','11','12'], dept:'CTE'},
+  {name:'Health Sciences',       type:'elective', grades:['10','11','12'], dept:'CTE'},
+  {name:'Criminal Justice',      type:'elective', grades:['11','12'],      dept:'CTE'},
+];
 
 function ManageCourses({ profile }) {
-  const [tab, setTab] = useState('scheduler'); // 'scheduler' | 'courses' | 'auto'
+  const [tab, setTab]         = useState('grid');
   const [courses, setCourses] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [bellPeriods, setBellPeriods] = useState([]);
-  const [modal, setModal] = useState(false);
+  const [users, setUsers]     = useState([]);
+  const [allPeriods, setAllPeriods] = useState([]); // full objects from Firestore
+  const [modal, setModal]     = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name:'', type:'core', teacherIds:[], grades:[], period:'' });
-  const [saving, setSaving] = useState(false);
+  const [form, setForm]       = useState({name:'',type:'core',teacherIds:[],grades:[],period:'',dept:''});
+  const [saving, setSaving]   = useState(false);
   const [scheduling, setScheduling] = useState(false);
-  const [scheduleResult, setScheduleResult] = useState(null);
-  const dragItem = useRef(null);
-  const dragOver = useRef(null);
+  const [schedResult, setSchedResult] = useState(null);
+  const [dragging, setDragging] = useState(null); // course being dragged
+  const [dragOver, setDragOver] = useState(null); // {period, grade}
+  const dragRef = useRef(null);
+  const dragOverRef = useRef(null);
 
-  const GRADES = ['9','10','11','12'];
-  // Only exclude periods whose names clearly indicate non-teaching time
-  // Use exact word boundaries to avoid accidentally matching "4th" etc.
-  const isNonTeachingPeriod = (name) => {
-    const n = name.toLowerCase().trim();
-    // Only exclude if the WHOLE name is about non-teaching (not just contains a word)
-    return n === 'homeroom' ||
-           n.startsWith('lunch') ||
-           n.startsWith('after school') ||
-           n === 'passing period' ||
-           n === 'break' ||
-           n === 'recess' ||
-           n === 'advisory' ||
-           n === 'study hall' ||
-           n === 'after school';
-  };
-
+  // ── Load data ──
   useEffect(() => {
-    const unsub = db.collection('courses').onSnapshot(s => {
+    const u1 = db.collection('courses').onSnapshot(s => {
       const docs = s.docs.map(d=>({id:d.id,...d.data()}));
       docs.sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
       setCourses(docs);
     });
-    db.collection('users').onSnapshot(s => setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active')));
-    db.collection('settings').doc('bell_schedule').onSnapshot(doc => {
-      // Store ALL periods from Firestore for the grid display
-      // The grid shows every row; non-teaching rows (lunch, homeroom etc) are just greyed out
-      const raw = (doc.exists && doc.data().periods?.length) ? doc.data().periods : BELL_SCHEDULE;
-      setBellPeriods(raw); // store the full period objects, not just names
+    const u2 = db.collection('users').onSnapshot(s =>
+      setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active'))
+    );
+    const u3 = db.collection('settings').doc('bell_schedule').onSnapshot(doc => {
+      const raw = doc.exists && doc.data().periods?.length
+        ? doc.data().periods
+        : BELL_SCHEDULE;
+      setAllPeriods(raw);
     });
-    return unsub;
+    return () => { u1(); u2(); u3(); };
   }, []);
 
+  // ── Derived ──
+  const NON_TEACH = n => {
+    const s = (n||'').toLowerCase().trim();
+    return s==='homeroom'||s.startsWith('lunch')||s.startsWith('after school')||s==='break'||s==='recess';
+  };
+
+  const teachPeriods = allPeriods.filter(b => !NON_TEACH(b.period||b));
+  const teachPeriodNames = teachPeriods.map(b => b.period||b);
+
+  // Build grid: period → grade → [courses]
+  const grid = useMemo(() => {
+    const g = {};
+    allPeriods.forEach(b => {
+      const p = b.period||b;
+      g[p] = {};
+      GRADES_ALL.forEach(gr => g[p][gr] = []);
+    });
+    courses.filter(c => c.period && c.grades?.length > 0).forEach(c => {
+      const p = c.period;
+      const gr = c.grades[0]; // grade is always set by drop column
+      if (g[p] && g[p][gr] !== undefined) {
+        g[p][gr] = [...g[p][gr], c];
+      }
+    });
+    return g;
+  }, [courses, allPeriods]);
+
+  const visibleIds = useMemo(() => {
+    const s = new Set();
+    Object.values(grid).forEach(row =>
+      Object.values(row).forEach(arr => (arr||[]).forEach(c => s.add(c.id)))
+    );
+    return s;
+  }, [grid]);
+
+  const unscheduled   = courses.filter(c => !c.period);
+  const notVisible    = courses.filter(c => c.period && !visibleIds.has(c.id));
+
   // ── Course CRUD ──
-  const openNew  = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:''}); setModal(true); };
-  const openEdit = (c) => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||''}); setModal(true); };
-  const toggleTeacher = uid => setForm(f=>({...f,teacherIds:f.teacherIds.includes(uid)?f.teacherIds.filter(x=>x!==uid):[...f.teacherIds,uid]}));
+  const openNew  = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:'',dept:''}); setModal(true); };
+  const openEdit = c  => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||'',dept:c.dept||''}); setModal(true); };
+  const toggleT  = uid => setForm(f=>({...f,teacherIds:f.teacherIds.includes(uid)?f.teacherIds.filter(x=>x!==uid):[...f.teacherIds,uid]}));
 
   const saveCourse = async () => {
     if (!form.name) return;
@@ -4649,274 +4705,275 @@ function ManageCourses({ profile }) {
     const teacherNames = form.teacherIds.map(id=>users.find(u=>u.id===id)?.displayName||'').filter(Boolean);
     if (editing) {
       await db.collection('courses').doc(editing.id).update({...form, teacherNames});
-      await addLog(profile.id, profile.displayName, 'Updated course', form.name);
     } else {
       await db.collection('courses').add({...form, teacherNames, sortOrder:courses.length, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
-      await addLog(profile.id, profile.displayName, 'Created course', form.name);
     }
+    await addLog(profile.id,profile.displayName,editing?'Updated course':'Created course',form.name);
     setModal(false); setSaving(false);
   };
 
   const deleteCourse = async c => {
     if (!confirm(`Delete "${c.name}"?`)) return;
     await db.collection('courses').doc(c.id).delete();
-    await addLog(profile.id, profile.displayName, 'Deleted course', c.name);
   };
 
-  // ── Drag reorder in courses list ──
-  const onDragStart = (e,idx) => { dragItem.current=idx; e.currentTarget.classList.add('dragging'); };
-  const onDragEnter = (e,idx) => { dragOver.current=idx; e.currentTarget.classList.add('drag-over'); };
-  const onDragLeave = e => e.currentTarget.classList.remove('drag-over');
-  const onDragEnd = async e => {
-    e.currentTarget.classList.remove('dragging');
-    document.querySelectorAll('.drag-row').forEach(r=>r.classList.remove('drag-over'));
-    if (dragItem.current===null||dragOver.current===null||dragItem.current===dragOver.current) return;
-    const reordered = [...courses];
-    const [moved] = reordered.splice(dragItem.current,1);
-    reordered.splice(dragOver.current,0,moved);
-    dragItem.current=null; dragOver.current=null;
-    const batch = db.batch();
-    reordered.forEach((c,i) => batch.update(db.collection('courses').doc(c.id),{sortOrder:i}));
+  // ── Drag-drop: assign course to a cell ──
+  const dropOnCell = async (period, grade) => {
+    if (!dragging) return;
+
+    const alreadyHere = (grid[period]?.[grade] || []).find(c => c.id === dragging.id);
+    if (alreadyHere) { setDragging(null); setDragOver(null); return; } // already in this exact cell
+
+    const alreadyInGrade = (grid[period]?.[grade] || []);
+    if (alreadyInGrade.length > 0) {
+      if (!confirm(`Grade ${grade} already has "${alreadyInGrade.map(c=>c.name).join(', ')}" in ${period}. Add here too?`)) {
+        setDragging(null); setDragOver(null); return;
+      }
+    }
+
+    // Check if this course already exists somewhere else
+    const existsElsewhere = dragging.period && (dragging.period !== period || (dragging.grades||[])[0] !== grade);
+
+    if (existsElsewhere) {
+      // CREATE a new doc for this grade/period — keeps original untouched
+      await db.collection('courses').add({
+        name: dragging.name,
+        type: dragging.type || 'core',
+        teacherIds: dragging.teacherIds || [],
+        teacherNames: dragging.teacherNames || [],
+        grades: [grade],
+        period,
+        sortOrder: dragging.sortOrder ?? courses.length,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    } else {
+      // First placement — just update the existing doc
+      await db.collection('courses').doc(dragging.id).update({ period, grades: [grade] });
+    }
+
+    setDragging(null); setDragOver(null);
+  };
+
+  const removeFromCell = async c => {
+    // If this course has duplicates (same name, different grades), just delete this one doc
+    const dupes = courses.filter(x => x.name === c.name && x.id !== c.id && x.period);
+    if (dupes.length > 0) {
+      // This is a duplicate — delete just this copy
+      await db.collection('courses').doc(c.id).delete();
+    } else {
+      // Only copy — just clear period/grade
+      await db.collection('courses').doc(c.id).update({ period: '', grades: [] });
+    }
+  };
+
+  // ── Drag reorder in course list ──
+  const onDragStartList = (e,idx) => { dragRef.current=idx; e.currentTarget.style.opacity='.4'; };
+  const onDragEnterList = (e,idx) => { dragOverRef.current=idx; };
+  const onDragEndList   = async e => {
+    e.currentTarget.style.opacity='1';
+    if (dragRef.current==null||dragOverRef.current==null||dragRef.current===dragOverRef.current) return;
+    const reordered=[...courses];
+    const [moved]=reordered.splice(dragRef.current,1);
+    reordered.splice(dragOverRef.current,0,moved);
+    dragRef.current=null; dragOverRef.current=null;
+    const batch=db.batch();
+    reordered.forEach((c,i)=>batch.update(db.collection('courses').doc(c.id),{sortOrder:i}));
     await batch.commit();
+  };
+
+  // ── Split combined courses ──
+  const seedCurriculum = async () => {
+    if (!confirm(
+      `This will REPLACE all existing courses with the official LHS curriculum (${LHS_CURRICULUM.length} courses).\n\n` +
+      `Teacher assignments and period placements will be cleared.\n\n` +
+      `Are you sure?`
+    )) return;
+
+    setSaving(true);
+
+    // Delete all existing courses
+    const existing = await db.collection('courses').get();
+    const delBatch = db.batch();
+    existing.docs.forEach(d => delBatch.delete(d.ref));
+    await delBatch.commit();
+
+    // Create new curriculum
+    const addBatch = db.batch();
+    LHS_CURRICULUM.forEach((c, i) => {
+      const ref = db.collection('courses').doc();
+      addBatch.set(ref, {
+        name: c.name,
+        type: c.type,
+        grades: c.grades,
+        dept: c.dept,
+        teacherIds: [],
+        teacherNames: [],
+        period: '',
+        sortOrder: i,
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+    await addBatch.commit();
+    await addLog(profile.id, profile.displayName, 'Loaded official LHS curriculum', `${LHS_CURRICULUM.length} courses`);
+    setSaving(false);
+    alert(`✓ ${LHS_CURRICULUM.length} courses loaded! Now assign teachers in Course List, then use Auto-Schedule.`);
+  };
+
+  const splitCourse = async c => {
+    const dashMatch = c.name.match(/^.+?\s*[—-]\s*(.+)$/);
+    const raw = dashMatch ? dashMatch[1] : c.name;
+    const parts = raw.split(',').map(s=>s.trim()).filter(Boolean);
+    if (parts.length <= 1) { alert(`"${c.name}" doesn't look combined — edit it manually.`); return; }
+    if (!confirm(`Split into:\n${parts.map(p=>'• '+p).join('\n')}\n\nOriginal will be deleted.`)) return;
+    const batch = db.batch();
+    parts.forEach((name,i) => {
+      const grades = inferGrades(name);
+      batch.set(db.collection('courses').doc(), {
+        name, type:c.type||'core', teacherIds:c.teacherIds||[], teacherNames:c.teacherNames||[],
+        grades, period:'', sortOrder:(c.sortOrder||0)+i,
+        createdAt:firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+    batch.delete(db.collection('courses').doc(c.id));
+    await batch.commit();
+    await addLog(profile.id,profile.displayName,'Split course',c.name);
   };
 
   // ── Auto-schedule ──
   const runAutoSchedule = async () => {
     setScheduling(true);
-    const bellDoc = await db.collection('settings').doc('bell_schedule').get();
-    let bells = BELL_SCHEDULE;
-    if (bellDoc.exists && bellDoc.data().periods?.length) bells = bellDoc.data().periods;
-    const isNonTeaching = (name) => {
-      const n = name.toLowerCase().trim();
-      return n==='homeroom'||n.startsWith('lunch')||n.startsWith('after school')||n==='break'||n==='recess'||n==='advisory'||n==='study hall'||n==='passing period';
-    };
-    const teachingPeriods = bells.filter(b=>b.type!=='break'&&!isNonTeaching(b.period)).map(b=>b.period);
-    console.log('[AutoScheduler] Periods:', teachingPeriods);
-    courses.forEach(c=>{
-      const g=c.grades?.length>0?c.grades:inferGradesFromName(c.name);
-      console.log(`  "${c.name}" grades:`,g.length>0?g:['9','10','11','12']);
-    });
-    const result = autoScheduleCourses(courses, teachingPeriods);
-    result.bellPeriods = teachingPeriods;
+    const result = autoSchedule(courses, teachPeriodNames);
+    result.bellPeriods = teachPeriodNames;
+    // Write to Firestore
     const batch = db.batch();
-    for (const c of result.assigned) {
-      const inferredGrades = c.grades?.length>0?c.grades:inferGradesFromName(c.name);
-      const finalGrades = inferredGrades.length>0?inferredGrades:['9','10','11','12'];
-      batch.update(db.collection('courses').doc(c.id),{period:c.period, grades:finalGrades});
-    }
+    result.assigned.forEach(c => {
+      batch.update(db.collection('courses').doc(c.id), { period:c.period, grades:c.grades });
+    });
     await batch.commit();
-    await addLog(profile.id, profile.displayName, 'Auto-scheduled courses', `${result.assigned.length} assigned, ${result.conflicts.length} conflicts`);
-    setScheduleResult(result);
+    await addLog(profile.id,profile.displayName,'Auto-scheduled',`${result.assigned.length} courses`);
+    setSchedResult(result);
     setScheduling(false);
-    setTab('scheduler'); // switch to visual after auto
+    setTab('grid');
   };
 
-  // ── Visual drag-drop scheduler ──
-  const [draggingCourse, setDraggingCourse] = useState(null);
-  const [dropTarget, setDropTarget] = useState(null);
-
-  // bellPeriods now holds full period objects {period, realStart, realEnd, ...}
-  // allGridPeriods = all period names in order from bell schedule
-  const allGridPeriods = useMemo(() => {
-    const fromBell = bellPeriods.map(b => typeof b === 'string' ? b : b.period);
-    // Also include any periods assigned to courses that aren't in the bell schedule
-    const fromCourses = [...new Set(courses.filter(c=>c.period).map(c=>c.period))];
-    const merged = [...fromBell];
-    fromCourses.forEach(p => { if (!merged.includes(p)) merged.push(p); });
-    if (merged.length === 0) return ['1st Period','2nd Period','3rd Period','4th Period','5th Period','6th Period'];
-    return merged;
-  }, [bellPeriods, courses]);
-
-  const gridAssignment = useMemo(() => {
-    const grid = {};
-    allGridPeriods.forEach(p => { grid[p] = {}; GRADES.forEach(g => { grid[p][g] = null; }); });
-    courses.forEach(c => {
-      if (!c.period) return;
-      const grades = c.grades?.length>0 ? c.grades : inferGradesFromName(c.name);
-      const finalGrades = grades.length>0 ? grades : GRADES;
-      if (grid[c.period]) {
-        finalGrades.forEach(g => { if (grid[c.period]) grid[c.period][g] = c; });
-      }
-    });
-    return grid;
-  }, [courses, allGridPeriods]);
-
-  const unscheduled = courses.filter(c => !c.period);
-
-  const dropCourseIntoCell = async (period, grade, course) => {
-    if (!course) return;
-    const inferredGrades = course.grades?.length>0 ? course.grades : inferGradesFromName(course.name);
-    const finalGrades = inferredGrades.length>0 ? inferredGrades : GRADES;
-
-    // Check conflicts: does any of this course's grades already have something in this period?
-    const conflicts = finalGrades.filter(g => {
-      const existing = gridAssignment[period]?.[g];
-      return existing && existing.id !== course.id;
-    });
-
-    if (conflicts.length > 0) {
-      if (!confirm(`Grade ${conflicts.join('/')} already has a class in ${period}. Replace it?`)) return;
-      // Remove conflicting courses from that period
-      const toRemove = finalGrades.map(g=>gridAssignment[period]?.[g]).filter(c=>c&&c.id!==course.id);
-      const uniqueToRemove = [...new Map(toRemove.map(c=>[c.id,c])).values()];
-      const batch2 = db.batch();
-      uniqueToRemove.forEach(c => batch2.update(db.collection('courses').doc(c.id),{period:''}));
-      // Clear old period from the dragged course if it had one
-      if (course.period && course.period !== period) batch2.update(db.collection('courses').doc(course.id),{period:''});
-      await batch2.commit();
-    }
-
-    await db.collection('courses').doc(course.id).update({ period, grades: finalGrades });
+  // ── Course chip (draggable) ──
+  const DEPT_COLORS = {
+    'English':'#3b82f6','Math':'#8b5cf6','Science':'#10b981',
+    'Social Studies':'#f59e0b','World Language':'#ec4899',
+    'PE & Health':'#06b6d4','Fine Arts':'#a855f7','CTE':'#f97316',
   };
 
-  const removeCourseFromPeriod = async course => {
-    await db.collection('courses').doc(course.id).update({ period: '' });
-  };
-
-  // Course card component (defined inside to access draggingCourse state)
-  const CourseChip = ({ course, inCell, onRemove }) => {
-    const grades = course.grades?.length>0?course.grades:inferGradesFromName(course.name);
-    const finalGrades = grades.length>0?grades:GRADES;
+  const Chip = ({ c, inCell, grade }) => {
+    const displayGrade = grade || c.grades?.[0];
+    const borderColor = DEPT_COLORS[c.dept] || (c.type==='elective'?'#8b5cf6':'#3b82f6');
     return (
-      <div
-        draggable
-        onDragStart={e=>{e.stopPropagation();setDraggingCourse(course);}}
-        onDragEnd={()=>setDraggingCourse(null)}
+      <div draggable
+        onDragStart={e=>{e.stopPropagation();setDragging(c);}}
+        onDragEnd={()=>{ if(!dragOver) setDragging(null); }}
         style={{
-          background: inCell?'var(--white)':'var(--bg)',
+          background:inCell?'var(--white)':'var(--bg)',
           border:'1px solid var(--border)',
-          borderLeft:`3px solid ${course.type==='core'?'#3b82f6':'#8b5cf6'}`,
-          borderRadius:7, padding:'.35rem .6rem',
-          cursor:'grab', userSelect:'none',
-          fontSize:'11.5px', lineHeight:1.35,
-          display:'flex', alignItems:'center', gap:'.4rem',
-          boxShadow: draggingCourse?.id===course.id?'0 4px 16px rgba(0,0,0,.2)':'var(--shadow-sm)',
-          opacity: draggingCourse?.id===course.id?0.5:1,
-          minWidth:0,
-        }}
-      >
-        <span style={{flexShrink:0,fontSize:'12px'}}>{TYPE_ICON[course.type]||'📚'}</span>
+          borderLeft:`3px solid ${borderColor}`,
+          borderRadius:7,padding:'.3rem .55rem',cursor:'grab',
+          fontSize:'11.5px',userSelect:'none',
+          display:'flex',alignItems:'center',gap:'.4rem',minWidth:0,
+          opacity:dragging?.id===c.id?.5:1,
+          boxShadow:'var(--shadow-sm)',
+        }}>
+        <span style={{flexShrink:0,fontSize:'11px'}}>{c.type==='elective'?'🎨':'✏️'}</span>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontWeight:600,color:'var(--navy)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{course.name}</div>
-          <div style={{display:'flex',gap:'.2rem',marginTop:'2px',flexWrap:'wrap'}}>
-            {finalGrades.sort().map(g=>(
-              <span key={g} style={{fontSize:'9px',fontWeight:700,padding:'0px 4px',borderRadius:4,background:GRADE_COLORS[g]+'22',color:GRADE_COLORS[g]}}>Gr{g}</span>
-            ))}
+          <div style={{fontWeight:600,color:'var(--navy)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:'12px'}}>{c.name}</div>
+          <div style={{display:'flex',gap:3,marginTop:1,alignItems:'center'}}>
+            {c.dept && <span style={{fontSize:'9px',color:borderColor,fontWeight:600}}>{c.dept}</span>}
+            {displayGrade && <span style={{fontSize:'9px',fontWeight:700,padding:'0 4px',borderRadius:3,background:GRADE_COLORS[displayGrade]+'22',color:GRADE_COLORS[displayGrade],marginLeft:c.dept?4:0}}>Gr{displayGrade}</span>}
           </div>
         </div>
-        {inCell && onRemove && (
-          <button onClick={e=>{e.stopPropagation();onRemove(course);}} style={{background:'none',border:'none',cursor:'pointer',color:'#ccc',fontSize:'12px',padding:'0 2px',flexShrink:0,lineHeight:1}} title="Remove from period">×</button>
-        )}
+        {inCell && <button onClick={e=>{e.stopPropagation();removeFromCell(c);}} style={{background:'none',border:'none',cursor:'pointer',color:'#bbb',padding:'0 2px',fontSize:13,lineHeight:1,flexShrink:0}}>×</button>}
       </div>
     );
   };
 
-  const core = courses.filter(c=>c.type!=='elective');
-  const elective = courses.filter(c=>c.type==='elective');
+  const core      = courses.filter(c=>c.type!=='elective');
+  const electives = courses.filter(c=>c.type==='elective');
+  const combined  = courses.filter(c=>(c.name||'').includes(','));
 
   return (
     <div>
       {/* Tabs */}
-      <div style={{display:'flex',gap:'.25rem',marginBottom:'1.25rem',background:'var(--bg2)',borderRadius:10,padding:4,width:'fit-content'}}>
-        {[['scheduler','📅 Visual Scheduler'],['courses','📋 Course List'],['auto','⚡ Auto-Schedule']].map(([id,label])=>(
+      <div style={{display:'flex',gap:2,marginBottom:'1.25rem',background:'var(--bg2)',borderRadius:10,padding:3,width:'fit-content'}}>
+        {[['grid','📅 Schedule Grid'],['list','📋 Course List'],['auto','⚡ Auto-Schedule']].map(([id,label])=>(
           <button key={id} onClick={()=>setTab(id)} style={{
-            padding:'.45rem 1rem',fontSize:'13px',fontWeight:tab===id?600:400,
-            border:'none',background:tab===id?'var(--white)':'transparent',
-            borderRadius:8,cursor:'pointer',color:tab===id?'var(--navy)':'var(--text3)',
-            fontFamily:'inherit',transition:'all .15s',boxShadow:tab===id?'var(--shadow-sm)':'none',
-            whiteSpace:'nowrap',
+            padding:'.4rem .9rem',fontSize:'13px',fontWeight:tab===id?600:400,border:'none',
+            background:tab===id?'var(--white)':'transparent',borderRadius:7,cursor:'pointer',
+            color:tab===id?'var(--navy)':'var(--text3)',fontFamily:'inherit',
+            boxShadow:tab===id?'var(--shadow-sm)':'none',whiteSpace:'nowrap',transition:'all .15s',
           }}>{label}</button>
         ))}
       </div>
 
-      {/* ═══════════════ VISUAL SCHEDULER TAB ═══════════════ */}
-      {tab==='scheduler' && (
-        <div style={{display:'grid',gridTemplateColumns:'1fr 220px',gap:'1.25rem',alignItems:'start'}}>
-          {/* Main grid */}
+      {/* ═══ SCHEDULE GRID ═══ */}
+      {tab==='grid' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 210px',gap:'1.25rem',alignItems:'start'}}>
+          {/* Grid */}
           <div className="panel" style={{overflow:'hidden'}}>
             <div className="panel-header">
-              <div>
-                <div className="panel-title">Period Schedule</div>
-                <div className="panel-subtitle">Drag courses from the right into period/grade cells · Click × to unassign</div>
-              </div>
-              <div style={{display:'flex',gap:'.35rem'}}>
-                {GRADES.map(g=>(
-                  <span key={g} style={{fontSize:'11px',fontWeight:600,padding:'3px 8px',borderRadius:6,background:GRADE_COLORS[g]+'22',color:GRADE_COLORS[g]}}>Gr{g}</span>
-                ))}
-              </div>
+              <div><div className="panel-title">Schedule Grid</div><div className="panel-subtitle">Drag courses from the right into any cell · Click × to remove</div></div>
             </div>
-
-            {allGridPeriods.length===0 ? (
-              <div className="empty"><span className="empty-icon">🔔</span><div className="empty-text">No periods configured</div><div className="empty-sub">Set up your Bell Schedule first</div></div>
+            {allPeriods.length===0 ? (
+              <div className="empty"><span className="empty-icon">🔔</span><div className="empty-text">Set up your Bell Schedule first</div></div>
             ) : (
               <div style={{overflowX:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse',minWidth:600}}>
+                <table style={{width:'100%',borderCollapse:'collapse',minWidth:580}}>
                   <thead>
                     <tr>
-                      <th style={{background:'var(--navy)',color:'white',padding:'.6rem .85rem',fontSize:'11.5px',fontWeight:700,textAlign:'left',width:120,position:'sticky',left:0,zIndex:3}}>Period</th>
-                      {GRADES.map(g=>(
-                        <th key={g} style={{background:GRADE_COLORS[g],color:'white',padding:'.6rem .85rem',fontSize:'12px',fontWeight:700,textAlign:'center',minWidth:160}}>
-                          Grade {g}
-                        </th>
+                      <th style={{background:'var(--navy)',color:'white',padding:'.55rem .75rem',fontSize:'11px',textAlign:'left',minWidth:110,position:'sticky',left:0,zIndex:4}}>Period</th>
+                      {GRADES_ALL.map(g=>(
+                        <th key={g} style={{background:GRADE_COLORS[g],color:'white',padding:'.55rem .75rem',fontSize:'12px',fontWeight:700,textAlign:'center',minWidth:155}}>Grade {g}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {allGridPeriods.map((period,pi) => {
-                      // Get the full bell period object for times
-                      const bellObj = bellPeriods.find(b => (typeof b==='string'?b:b.period) === period);
-                      const periodName = typeof bellObj==='string' ? bellObj : (bellObj?.period || period);
-                      const realTime = bellObj?.realStart ? `${bellObj.realStart}–${bellObj.realEnd}` : null;
-                      const gameTime = bellObj?.gameStart ? `${bellObj.gameStart}–${bellObj.gameEnd}` : null;
-                      const isNonTeach = isNonTeachingPeriod(period);
-
+                    {allPeriods.map((b,pi) => {
+                      const p = b.period||b;
+                      const isNT = NON_TEACH(p);
                       return (
-                        <tr key={period} style={{borderBottom:'1px solid var(--border)',opacity:isNonTeach?0.55:1}}>
-                          {/* Period label */}
+                        <tr key={p} style={{borderBottom:'1px solid var(--border)',opacity:isNT?.6:1}}>
                           <td style={{
-                            padding:'.5rem .85rem',fontWeight:600,fontSize:'12px',color:'var(--navy)',
-                            background:isNonTeach?'#f0f0ee':pi%2===0?'var(--bg)':'#f5f5f2',
-                            borderRight:'2px solid var(--border)',
-                            position:'sticky',left:0,zIndex:2,whiteSpace:'nowrap',
+                            padding:'.4rem .7rem',fontWeight:600,fontSize:'11px',color:'var(--navy)',
+                            background:isNT?'#f2f1ef':pi%2===0?'var(--bg)':'#f5f5f2',
+                            borderRight:'2px solid var(--border)',position:'sticky',left:0,zIndex:2,
                           }}>
-                            <div>{periodName}</div>
-                            {realTime && <div style={{fontSize:'9.5px',color:'var(--text3)',fontWeight:400,marginTop:'1px'}}>⏰ {realTime}</div>}
-                            {gameTime && <div style={{fontSize:'9.5px',color:'var(--text3)',fontWeight:400}}>🎮 {gameTime}</div>}
+                            <div>{p}</div>
+                            {b.realStart&&<div style={{fontSize:'9px',color:'var(--text3)',fontWeight:400}}>⏰{b.realStart}–{b.realEnd}</div>}
+                            {b.gameStart&&<div style={{fontSize:'9px',color:'var(--text3)',fontWeight:400}}>🎮{b.gameStart}–{b.gameEnd}</div>}
                           </td>
-                          {/* Grade cells */}
-                          {GRADES.map(g => {
-                            const cellCourse = gridAssignment[period]?.[g];
-                            const isTarget = !isNonTeach && dropTarget?.period===period && dropTarget?.grade===g;
+                          {GRADES_ALL.map(g => {
+                            const cellCourses = grid[p]?.[g] || [];
+                            const isOver = dragOver?.period===p && dragOver?.grade===g;
                             return (
                               <td key={g}
-                                onDragOver={e=>{ if(!isNonTeach){e.preventDefault();setDropTarget({period,grade:g});}}}
-                                onDragLeave={()=>setDropTarget(null)}
-                                onDrop={async e=>{
-                                  if(isNonTeach) return;
-                                  e.preventDefault();setDropTarget(null);
-                                  if(draggingCourse) await dropCourseIntoCell(period,g,draggingCourse);
-                                }}
+                                onDragOver={e=>{ if(!isNT){e.preventDefault();setDragOver({period:p,grade:g});}}}
+                                onDragLeave={()=>setDragOver(null)}
+                                onDrop={async e=>{ if(isNT)return; e.preventDefault(); setDragOver(null); await dropOnCell(p,g); }}
                                 style={{
-                                  padding:'.35rem .4rem',
-                                  verticalAlign:'top',
-                                  background: isNonTeach ? '#f5f4f1'
-                                    : isTarget ? 'rgba(29,158,117,.08)'
-                                    : pi%2===0?'var(--white)':'#fafaf9',
-                                  border: isTarget?`2px dashed var(--teal)`:`1px solid var(--border)`,
-                                  transition:'all .1s',
-                                  minHeight:52,
-                                  cursor: isNonTeach ? 'not-allowed' : 'default',
-                                }}
-                              >
-                                {isNonTeach ? (
-                                  <div style={{height:44,display:'flex',alignItems:'center',justifyContent:'center',color:'#ccc',fontSize:'10px'}}>
-                                    {period.toLowerCase().includes('lunch') ? '🍽️' : period.toLowerCase().includes('homeroom') ? '🏠' : '—'}
+                                  padding:'.3rem .35rem',verticalAlign:'top',minHeight:50,
+                                  background:isNT?'#f5f4f1':isOver?'rgba(29,158,117,.07)':pi%2===0?'var(--white)':'#fafaf9',
+                                  border:isOver?'2px dashed var(--teal)':'1px solid var(--border)',
+                                  transition:'background .1s',
+                                }}>
+                                {isNT ? (
+                                  <div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',color:'#ccc',fontSize:'11px'}}>
+                                    {p.toLowerCase().includes('lunch')?'🍽️ Lunch':p.toLowerCase().includes('homeroom')?'🏠 Homeroom':'—'}
                                   </div>
-                                ) : cellCourse ? (
-                                  <CourseChip course={cellCourse} inCell={true} onRemove={removeCourseFromPeriod}/>
+                                ) : cellCourses.length > 0 ? (
+                                  <div style={{display:'flex',flexDirection:'column',gap:'.25rem'}}>
+                                    {cellCourses.map(c=><Chip key={c.id} c={c} inCell={true} grade={g}/>)}
+                                    {/* Drop indicator when dragging over occupied cell */}
+                                    {isOver && <div style={{height:28,border:'2px dashed var(--teal)',borderRadius:6,display:'flex',alignItems:'center',justifyContent:'center',color:'var(--teal)',fontSize:'10px'}}>+ Add here</div>}
+                                  </div>
                                 ) : (
-                                  <div style={{height:44,display:'flex',alignItems:'center',justifyContent:'center',color:isTarget?'var(--teal)':'#d1d5db',fontSize:'11px',fontStyle:'italic'}}>
-                                    {isTarget?'Drop here':'—'}
+                                  <div style={{height:42,display:'flex',alignItems:'center',justifyContent:'center',color:isOver?'var(--teal)':'#ddd',fontSize:'11px',fontStyle:'italic'}}>
+                                    {isOver?'Drop here':'—'}
                                   </div>
                                 )}
                               </td>
@@ -4931,55 +4988,75 @@ function ManageCourses({ profile }) {
             )}
           </div>
 
-          {/* Right panel: unscheduled courses */}
-          <div style={{position:'sticky',top:'1rem',display:'flex',flexDirection:'column',gap:'.85rem'}}>
+          {/* Side panel */}
+          <div style={{display:'flex',flexDirection:'column',gap:'.85rem',position:'sticky',top:'1rem'}}>
+            {/* Drag palette — unique course names, one chip per course */}
             <div className="panel">
-              <div className="panel-header" style={{padding:'.75rem 1rem'}}>
+              <div className="panel-header" style={{padding:'.7rem 1rem'}}>
                 <div>
-                  <div className="panel-title" style={{fontSize:'14px'}}>Unscheduled</div>
-                  <div className="panel-subtitle">{unscheduled.length} course{unscheduled.length!==1?'s':''}</div>
+                  <div className="panel-title" style={{fontSize:'13.5px'}}>Courses</div>
+                  <div className="panel-subtitle">Drag into any cell</div>
+                </div>
+                <span className="badge badge-navy">{courses.length}</span>
+              </div>
+              <div style={{padding:'.5rem',display:'flex',flexDirection:'column',gap:'.3rem',maxHeight:420,overflowY:'auto'}}>
+                {/* Deduplicate by name for the palette — show one chip per unique course name */}
+                {[...new Map(courses.map(c=>[c.name,c])).values()].map(c=>(
+                  <Chip key={c.id} c={c} inCell={false}/>
+                ))}
+              </div>
+            </div>
+            {/* Unscheduled */}
+            {unscheduled.length > 0 && (
+              <div className="panel">
+                <div className="panel-header" style={{padding:'.7rem 1rem'}}>
+                  <div className="panel-title" style={{fontSize:'13.5px'}}>⚠️ Unscheduled</div>
+                  <span className="badge badge-red">{unscheduled.length}</span>
+                </div>
+                <div style={{padding:'.5rem',display:'flex',flexDirection:'column',gap:'.3rem',maxHeight:200,overflowY:'auto'}}>
+                  {unscheduled.map(c=><Chip key={c.id} c={c} inCell={false}/>)}
                 </div>
               </div>
-              <div style={{padding:'.6rem',display:'flex',flexDirection:'column',gap:'.35rem',maxHeight:400,overflowY:'auto'}}>
-                {unscheduled.length===0 ? (
-                  <div style={{textAlign:'center',padding:'1rem',color:'var(--text3)',fontSize:'12px'}}>All courses scheduled ✓</div>
-                ) : unscheduled.map(c=>(
-                  <CourseChip key={c.id} course={c} inCell={false}/>
-                ))}
-              </div>
-            </div>
-
-            {/* All courses (already scheduled) */}
-            <div className="panel">
-              <div className="panel-header" style={{padding:'.75rem 1rem'}}>
-                <div className="panel-title" style={{fontSize:'14px'}}>All Courses</div>
-              </div>
-              <div style={{padding:'.6rem',display:'flex',flexDirection:'column',gap:'.35rem',maxHeight:300,overflowY:'auto'}}>
-                {courses.filter(c=>c.period).map(c=>(
-                  <CourseChip key={c.id} course={c} inCell={false}/>
-                ))}
-              </div>
-            </div>
-
-            {/* Legend */}
-            <div style={{background:'var(--bg)',borderRadius:8,padding:'.75rem',fontSize:'11.5px',color:'var(--text3)'}}>
-              <div style={{fontWeight:600,marginBottom:'.4rem',color:'var(--text2)'}}>How to use:</div>
-              <div>• Drag courses into cells to schedule them</div>
-              <div style={{marginTop:'.2rem'}}>• Click × on a cell to unassign</div>
-              <div style={{marginTop:'.2rem'}}>• Drag between cells to move</div>
-              <div style={{marginTop:'.2rem'}}>• Use ⚡ Auto-Schedule tab to fill automatically</div>
+            )}
+            <div style={{background:'var(--bg)',borderRadius:8,padding:'.65rem',fontSize:'11.5px',color:'var(--text3)'}}>
+              <div style={{fontWeight:600,color:'var(--text2)',marginBottom:'.3rem'}}>How to use</div>
+              <div>• Drag a course into any cell</div>
+              <div>• Same course can go in multiple grades</div>
+              <div>• Click × to remove from a cell</div>
             </div>
           </div>
         </div>
       )}
 
-      {/* ═══════════════ COURSE LIST TAB ═══════════════ */}
-      {tab==='courses' && (
+      {/* ═══ COURSE LIST ═══ */}
+      {tab==='list' && (
         <div>
-          <div style={{display:'flex',justifyContent:'flex-end',marginBottom:'1rem'}}>
-            <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={13}/> New Course</button>
+          {/* Official curriculum loader */}
+          <div style={{background:'linear-gradient(135deg,#0B1F4A,#0a2a1e)',borderRadius:'var(--radius)',padding:'1rem 1.5rem',marginBottom:'1.25rem',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'1rem',flexWrap:'wrap'}}>
+            <div>
+              <div style={{color:'white',fontWeight:600,fontSize:'14px'}}>📚 Official LHS Curriculum</div>
+              <div style={{color:'rgba(255,255,255,.5)',fontSize:'12px',marginTop:'2px'}}>{LHS_CURRICULUM.length} courses · English, Math, Science, Social Studies, Languages, PE, Arts, CTE</div>
+            </div>
+            <button
+              className="btn btn-sm"
+              style={{background:'var(--teal)',color:'white',border:'none',fontWeight:700,flexShrink:0}}
+              onClick={seedCurriculum}
+              disabled={saving}
+            >
+              {saving?<div className="spinner"/>:'⚡ Load Official Curriculum'}
+            </button>
           </div>
-          {[['Core Courses',core],['Electives',elective]].map(([label,list])=>(
+          <div style={{display:'flex',gap:'.5rem',marginBottom:'1rem',flexWrap:'wrap',alignItems:'center'}}>
+            {combined.length>0&&(
+              <button className="btn btn-sm" style={{background:'#fffbeb',border:'1px solid #f0d080',color:'#8c5e00',fontWeight:600}}
+                onClick={async()=>{
+                  if(!confirm(`Split all ${combined.length} combined courses?`))return;
+                  for(const c of combined) await splitCourse(c);
+                }}>✂️ Split {combined.length} combined</button>
+            )}
+            <button className="btn btn-primary" style={{marginLeft:'auto'}} onClick={openNew}><Icon name="plus" size={13}/> New Course</button>
+          </div>
+          {[['Core Courses',core],['Electives',electives]].map(([label,list])=>(
             <div key={label} className="panel" style={{marginBottom:'1rem'}}>
               <div className="panel-header">
                 <span className="panel-title">{label}</span>
@@ -4987,34 +5064,23 @@ function ManageCourses({ profile }) {
               </div>
               <div className="table-scroll">
                 <table>
-                  <thead><tr><th style={{width:32}}></th><th>Course</th><th>Period</th><th>Grades</th><th>Teachers</th><th/></tr></thead>
+                  <thead><tr><th style={{width:28}}></th><th>Course</th><th>Dept</th><th>Period</th><th>Teachers</th><th></th></tr></thead>
                   <tbody>
                     {list.length===0
-                      ? <tr><td colSpan="6"><div className="empty"><div className="empty-text">No {label.toLowerCase()} yet</div></div></td></tr>
-                      : list.map(c=>(
-                        <tr key={c.id} className="drag-row" draggable
-                          onDragStart={e=>onDragStart(e,courses.indexOf(c))}
-                          onDragEnter={e=>onDragEnter(e,courses.indexOf(c))}
-                          onDragLeave={onDragLeave} onDragEnd={onDragEnd}
+                      ? <tr><td colSpan="6"><div className="empty"><div className="empty-text">None yet</div></div></td></tr>
+                      : list.map((c,i)=>(
+                        <tr key={c.id} draggable
+                          onDragStart={e=>onDragStartList(e,courses.indexOf(c))}
+                          onDragEnter={e=>onDragEnterList(e,courses.indexOf(c))}
+                          onDragEnd={onDragEndList}
                           onDragOver={e=>e.preventDefault()}>
                           <td><span className="drag-handle">⠿</span></td>
                           <td style={{fontWeight:500}}>{c.name}</td>
-                          <td style={{fontSize:'12px'}}>
-                            {c.period
-                              ? <span style={{color:'var(--teal)',fontWeight:600}}>{c.period}</span>
-                              : <span style={{color:'var(--text3)'}}>—</span>}
-                          </td>
-                          <td>
-                            {(c.grades||[]).length>0
-                              ? (c.grades||[]).sort().map(g=><span key={g} className="badge badge-navy" style={{fontSize:'10px',marginRight:2}}>Gr {g}</span>)
-                              : <span style={{color:'var(--text3)',fontSize:'12px'}}>—</span>}
-                          </td>
-                          <td>
-                            {(c.teacherIds||[]).length===0
-                              ? <span style={{color:'var(--text3)',fontSize:'12px'}}>None assigned</span>
-                              : (c.teacherIds||[]).map(id=>{const u=users.find(u=>u.id===id);return u?<span key={id} className="course-tag-teal course-tag">{u.displayName}</span>:null;})}
-                          </td>
-                          <td style={{display:'flex',gap:'.4rem'}}>
+                          <td style={{fontSize:'11.5px',color:'var(--text3)'}}>{c.dept||'—'}</td>
+                          <td>{c.period?<span style={{color:'var(--teal)',fontWeight:600,fontSize:'12px'}}>{c.period}</span>:<span style={{color:'var(--text3)'}}>—</span>}</td>
+                          <td style={{fontSize:'12px',color:'var(--text2)'}}>{(c.teacherIds||[]).map(id=>users.find(u=>u.id===id)?.displayName).filter(Boolean).join(', ')||<span style={{color:'var(--text3)'}}>None</span>}</td>
+                          <td style={{display:'flex',gap:'.3rem'}}>
+                            {c.name.includes(',')&&<button className="btn btn-ghost btn-sm" style={{color:'#b07d00',fontSize:'11px'}} onClick={()=>splitCourse(c)}>✂️</button>}
                             <button className="btn btn-ghost btn-sm" onClick={()=>openEdit(c)}><Icon name="edit" size={12}/></button>
                             <button className="btn btn-danger btn-sm" onClick={()=>deleteCourse(c)}><Icon name="trash" size={12}/></button>
                           </td>
@@ -5028,151 +5094,66 @@ function ManageCourses({ profile }) {
         </div>
       )}
 
-      {/* ═══════════════ AUTO-SCHEDULE TAB ═══════════════ */}
+      {/* ═══ AUTO-SCHEDULE ═══ */}
       {tab==='auto' && (
-        <div>
-          <div className="panel" style={{marginBottom:'1.25rem'}}>
-            <div className="panel-header">
-              <div>
-                <div className="panel-title">⚡ Auto-Schedule</div>
-                <div className="panel-subtitle">Automatically assigns every course to a period with no conflicts</div>
-              </div>
+        <div className="panel">
+          <div className="panel-header">
+            <div><div className="panel-title">⚡ Auto-Schedule</div><div className="panel-subtitle">Fills every grade slot with no conflicts</div></div>
+          </div>
+          <div className="panel-body">
+            <div style={{background:'#f0fdf8',border:'1px solid #9fe1cb',borderRadius:10,padding:'1rem 1.25rem',marginBottom:'1.25rem',fontSize:'13px',color:'#0a5c45',lineHeight:1.8}}>
+              <strong>How it works:</strong><br/>
+              1. Each course gets placed in <strong>one cell</strong> — one period + one grade<br/>
+              2. Courses spread across all grade columns automatically<br/>
+              3. No teacher teaches two classes in the same period<br/>
+              4. No teacher teaches two classes in the same period<br/>
+              5. Courses spread evenly across {teachPeriodNames.length} teaching periods
             </div>
-            <div className="panel-body">
-              {/* How it works */}
-              <div style={{background:'#f0fdf8',border:'1px solid #9fe1cb',borderRadius:10,padding:'1rem 1.25rem',marginBottom:'1.25rem',fontSize:'13px',color:'#0a5c45',lineHeight:1.7}}>
-                <div style={{fontWeight:700,marginBottom:'.35rem'}}>How it works:</div>
-                <div>1. <strong>Grades are inferred from course names</strong> — "English 9" → Grade 9, "Biology" (no number) → all grades</div>
-                <div>2. <strong>Conflicts are avoided</strong> — no two courses with the same grade get the same period; no teacher teaches two classes at once</div>
-                <div>3. <strong>Courses are spread evenly</strong> across all {bellPeriods.length} teaching periods</div>
-                <div>4. After running, switch to the <strong>Visual Scheduler</strong> tab to drag and adjust</div>
-              </div>
 
-              {/* Per-course preview of grade detection */}
-              <div style={{marginBottom:'1.25rem'}}>
-                <div style={{fontSize:'12px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:'.6rem'}}>
-                  Grade detection preview — {courses.length} courses
+            <div style={{display:'flex',alignItems:'center',gap:'1rem'}}>
+              <button className="btn btn-primary" style={{background:'linear-gradient(135deg,#1D9E75,#0f6e56)',fontWeight:700,fontSize:'14px',padding:'.6rem 1.5rem'}} onClick={runAutoSchedule} disabled={scheduling||courses.length===0||teachPeriodNames.length===0}>
+                {scheduling?<><div className="spinner" style={{width:14,height:14,marginRight:6}}/> Scheduling...</>:`⚡ Auto-schedule ${courses.length} courses →`}
+              </button>
+              <span style={{fontSize:'12px',color:'var(--text3)'}}>{teachPeriodNames.length} teaching periods · {courses.length} courses</span>
+            </div>
+            {schedResult&&(
+              <div style={{marginTop:'1.5rem',border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+                <div style={{background:'var(--navy)',color:'white',padding:'.5rem .75rem',fontSize:'13px',fontWeight:600}}>
+                  ✓ {schedResult.assigned.length} placed · {schedResult.conflicts.length} conflicts
                 </div>
-                <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
-                  <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',background:'var(--bg)',padding:'.4rem .75rem',fontSize:'11px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.05em',borderBottom:'1px solid var(--border)'}}>
-                    <span>Course</span><span>Detected grades</span><span style={{width:80,textAlign:'center'}}>Period</span>
-                  </div>
-                  <div style={{maxHeight:320,overflowY:'auto'}}>
-                    {courses.map((c,i)=>{
-                      const inferred = c.grades?.length>0?c.grades:inferGradesFromName(c.name);
-                      const final = inferred.length>0?inferred:GRADES;
-                      const isAllGrades = final.length===4;
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+                  <thead><tr style={{background:'var(--bg)'}}><th style={{padding:'.4rem .75rem',textAlign:'left'}}>Period</th>{GRADES_ALL.map(g=><th key={g} style={{padding:'.4rem .75rem',textAlign:'center',color:GRADE_COLORS[g],fontWeight:700}}>Gr{g}</th>)}</tr></thead>
+                  <tbody>
+                    {(schedResult.bellPeriods||teachPeriodNames).map((p,i)=>{
+                      const row={};
+                      schedResult.assigned.filter(c=>c.period===p).forEach(c=>(c.grades||[]).forEach(g=>{row[g]=c;}));
                       return (
-                        <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',alignItems:'center',padding:'.45rem .75rem',borderBottom:i<courses.length-1?'1px solid var(--border)':'none',background:i%2===0?'var(--white)':'var(--bg)'}}>
-                          <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
-                            <span style={{fontSize:'12px'}}>{c.type==='core'?'✏️':'🎨'}</span>
-                            <span style={{fontWeight:500,fontSize:'13px',color:'var(--navy)'}}>{c.name}</span>
-                          </div>
-                          <div style={{display:'flex',gap:'.2rem',flexWrap:'wrap',justifyContent:'flex-end',padding:'0 .75rem'}}>
-                            {final.sort().map(g=>(
-                              <span key={g} style={{fontSize:'10px',fontWeight:700,padding:'1px 6px',borderRadius:6,background:GRADE_COLORS[g]+'22',color:GRADE_COLORS[g]}}>Gr{g}</span>
-                            ))}
-                            {isAllGrades && <span style={{fontSize:'10px',color:'#f59e0b',marginLeft:'.25rem'}}>⚠️ all</span>}
-                          </div>
-                          <div style={{width:80,textAlign:'center',fontSize:'12px',fontWeight:c.period?600:400,color:c.period?'var(--teal)':'var(--text3)'}}>
-                            {c.period||'—'}
-                          </div>
-                        </div>
+                        <tr key={p} style={{borderTop:'1px solid var(--border)',background:i%2?'var(--bg)':'var(--white)'}}>
+                          <td style={{padding:'.35rem .75rem',fontWeight:600,color:'var(--navy)',borderRight:'1px solid var(--border)'}}>{p}</td>
+                          {GRADES_ALL.map(g=><td key={g} style={{padding:'.3rem .4rem',textAlign:'center'}}>
+                            {row[g]?<span style={{background:'#e8eeff',border:'1px solid #c5d0f5',borderRadius:5,padding:'2px 6px',fontSize:'11px',fontWeight:600,color:'var(--navy)'}}>{row[g].name}</span>:<span style={{color:'#ddd'}}>—</span>}
+                          </td>)}
+                        </tr>
                       );
                     })}
+                  </tbody>
+                </table>
+                {schedResult.conflicts.length>0&&(
+                  <div style={{background:'#fff5f5',borderTop:'1px solid #fca5a5',padding:'.75rem 1rem',fontSize:'12px',color:'#c0392b'}}>
+                    <strong>Couldn't place:</strong> {schedResult.conflicts.join(', ')}
+                    <div style={{marginTop:'.25rem',opacity:.8}}>Set grades manually in Course List, then re-run.</div>
                   </div>
-                </div>
-                <div style={{fontSize:'11.5px',color:'#b07d00',marginTop:'.5rem',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'.5rem .75rem'}}>
-                  ⚠️ Courses showing <strong>all 4 grades</strong> (no grade number in name) will block an entire period for all grades. If you have many such courses, set their grades manually in the Course List tab first, then re-run.
-                </div>
+                )}
               </div>
-
-              <div style={{display:'flex',alignItems:'center',gap:'1rem'}}>
-                <button
-                  className="btn btn-primary"
-                  style={{background:'linear-gradient(135deg,#1D9E75,#0f6e56)',fontWeight:700,fontSize:'14px',padding:'.6rem 1.5rem'}}
-                  onClick={runAutoSchedule}
-                  disabled={scheduling||courses.length===0}
-                >
-                  {scheduling?<><div className="spinner" style={{width:14,height:14,marginRight:6}}/> Scheduling...</>:`⚡ Auto-schedule ${courses.length} courses →`}
-                </button>
-                <div style={{fontSize:'12px',color:'var(--text3)'}}>
-                  {bellPeriods.length} teaching periods · {courses.length} courses
-                </div>
-              </div>
-
-              {/* Result after auto-schedule */}
-              {scheduleResult && (
-                <div style={{marginTop:'1.5rem'}}>
-                  <div style={{fontWeight:700,fontSize:'13px',color:'var(--navy)',marginBottom:'.75rem'}}>
-                    Result — {scheduleResult.assigned.length} assigned · {scheduleResult.conflicts.length} conflicts
-                  </div>
-                  {/* Grid result */}
-                  <div style={{overflowX:'auto',border:'1px solid var(--border)',borderRadius:8}}>
-                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
-                      <thead>
-                        <tr style={{background:'var(--navy)'}}>
-                          <th style={{padding:'.5rem .75rem',color:'white',textAlign:'left',fontWeight:600,width:100}}>Period</th>
-                          {GRADES.map(g=>(
-                            <th key={g} style={{padding:'.5rem .75rem',color:'white',textAlign:'center',fontWeight:600,background:GRADE_COLORS[g]}}>Grade {g}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(scheduleResult.bellPeriods||bellPeriods).map((period,pi)=>{
-                          const rowMap = {};
-                          scheduleResult.assigned.filter(c=>c.period===period).forEach(c=>{
-                            const grades=c.grades?.length>0?c.grades:inferGradesFromName(c.name);
-                            const final=grades.length>0?grades:GRADES;
-                            final.forEach(g=>{ rowMap[g]=c; });
-                          });
-                          return (
-                            <tr key={period} style={{borderBottom:'1px solid var(--border)',background:pi%2===0?'var(--white)':'var(--bg)'}}>
-                              <td style={{padding:'.4rem .75rem',fontWeight:600,color:'var(--navy)',fontSize:'11.5px',borderRight:'2px solid var(--border)'}}>{period}</td>
-                              {GRADES.map(g=>{
-                                const c=rowMap[g];
-                                return (
-                                  <td key={g} style={{padding:'.3rem .4rem',textAlign:'center'}}>
-                                    {c?(
-                                      <div style={{background:c.type==='core'?'#ebf0ff':'#f0ebff',border:`1px solid ${c.type==='core'?'#c5d0f5':'#d5c8f5'}`,borderRadius:6,padding:'.25rem .4rem',fontSize:'11px',fontWeight:600,color:'var(--navy)'}}>{c.name}</div>
-                                    ):(
-                                      <span style={{color:'#d1d5db'}}>—</span>
-                                    )}
-                                  </td>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                  {scheduleResult.conflicts.length>0&&(
-                    <div style={{marginTop:'.75rem',background:'#fff5f5',border:'1px solid #fca5a5',borderRadius:8,padding:'.75rem 1rem'}}>
-                      <div style={{fontWeight:700,fontSize:'12px',color:'#c0392b',marginBottom:'.35rem'}}>⚠️ Couldn't assign ({scheduleResult.conflicts.length}):</div>
-                      {scheduleResult.conflicts.map((name,i)=>{
-                        const c=courses.find(c=>c.name===name);
-                        const g=c?.grades?.length>0?c.grades:inferGradesFromName(name);
-                        const final=g.length>0?g:GRADES;
-                        return <div key={i} style={{fontSize:'12px',color:'#c0392b',padding:'2px 0'}}>• {name} <span style={{opacity:.7}}>(grades: {final.map(x=>`Gr${x}`).join(', ')})</span></div>;
-                      })}
-                      <div style={{fontSize:'11px',color:'#c0392b',marginTop:'.4rem',opacity:.75}}>Go to Course List → set grades manually → re-run auto-schedule</div>
-                    </div>
-                  )}
-                  <button className="btn btn-primary btn-sm" style={{marginTop:'1rem'}} onClick={()=>setTab('scheduler')}>
-                    View in Visual Scheduler →
-                  </button>
-                </div>
-              )}
-            </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* ═══════════════ COURSE MODAL ═══════════════ */}
-      {modal && (
+      {/* ═══ COURSE MODAL ═══ */}
+      {modal&&(
         <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
-          <div className="modal" style={{maxWidth:520}}>
+          <div className="modal" style={{maxWidth:500}}>
             <div className="modal-header">
               <span className="modal-title">{editing?'Edit Course':'New Course'}</span>
               <button className="modal-close" onClick={()=>setModal(false)}><Icon name="x" size={14}/></button>
@@ -5182,44 +5163,38 @@ function ManageCourses({ profile }) {
                 <label className="form-label">Course name</label>
                 <input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. English 9, Photography"/>
               </div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'.75rem'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'.75rem'}}>
                 <div className="form-group">
                   <label className="form-label">Type</label>
                   <select className="form-input form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
-                    <option value="core">Core course</option>
+                    <option value="core">Core</option>
                     <option value="elective">Elective</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Department</label>
+                  <select className="form-input form-select" value={form.dept} onChange={e=>setForm(f=>({...f,dept:e.target.value}))}>
+                    <option value="">— Select —</option>
+                    {['English','Math','Science','Social Studies','World Language','PE & Health','Fine Arts','CTE'].map(d=><option key={d} value={d}>{d}</option>)}
                   </select>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Period</label>
                   <select className="form-input form-select" value={form.period} onChange={e=>setForm(f=>({...f,period:e.target.value}))}>
-                    <option value="">— No period —</option>
-                    {allGridPeriods.filter(p=>!isNonTeachingPeriod(p)).map(p=><option key={p} value={p}>{p}</option>)}
+                    <option value="">— None —</option>
+                    {teachPeriodNames.map(p=><option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Grade levels</label>
-                <div style={{display:'flex',gap:'.5rem',flexWrap:'wrap'}}>
-                  {GRADES.map(g=>(
-                    <label key={g} style={{display:'flex',alignItems:'center',gap:'.3rem',padding:'.4rem .75rem',border:`1.5px solid ${(form.grades||[]).includes(g)?GRADE_COLORS[g]:'var(--border)'}`,borderRadius:8,cursor:'pointer',background:(form.grades||[]).includes(g)?GRADE_COLORS[g]+'22':'transparent',transition:'all .12s'}}>
-                      <input type="checkbox" style={{display:'none'}} checked={(form.grades||[]).includes(g)} onChange={()=>setForm(f=>({...f,grades:(f.grades||[]).includes(g)?f.grades.filter(x=>x!==g):[...(f.grades||[]),g]}))}/>
-                      <span style={{fontSize:'13px',fontWeight:600,color:(form.grades||[]).includes(g)?GRADE_COLORS[g]:'var(--text2)'}}>Grade {g}</span>
+              </div>              <div className="form-group">
+                <label className="form-label">Teachers</label>
+                <div style={{maxHeight:160,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8,padding:'.4rem'}}>
+                  {users.map(u=>(
+                    <label key={u.id} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.3rem .25rem',cursor:'pointer',fontSize:'13px',borderRadius:5,background:form.teacherIds.includes(u.id)?'var(--bg)':'transparent'}}>
+                      <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleT(u.id)}/>
+                      <span style={{fontWeight:500}}>{u.rpName||u.displayName}</span>
+                      <span style={{color:'var(--text3)',fontSize:'11px'}}>{u.rankName}</span>
                     </label>
                   ))}
-                </div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Assign teachers</label>
-                <div style={{maxHeight:180,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8,padding:'.5rem'}}>
-                  {users.length===0?<div style={{color:'var(--text3)',fontSize:'13px',padding:'.25rem'}}>No active staff</div>
-                    :users.map(u=>(
-                      <label key={u.id} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.35rem .25rem',cursor:'pointer',fontSize:'13px',borderRadius:6,background:form.teacherIds.includes(u.id)?'var(--bg)':'transparent'}}>
-                        <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleTeacher(u.id)}/>
-                        <span style={{fontWeight:500}}>{u.rpName||u.displayName}</span>
-                        <span style={{color:'var(--text3)',fontSize:'11px'}}>{u.rankName}</span>
-                      </label>
-                    ))}
                 </div>
               </div>
             </div>
