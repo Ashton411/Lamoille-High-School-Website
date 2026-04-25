@@ -5226,14 +5226,43 @@ function ManageCourses({ profile }) {
                 </div>
               </div>              <div className="form-group">
                 <label className="form-label">Teachers</label>
-                <div style={{maxHeight:160,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8,padding:'.4rem'}}>
-                  {users.map(u=>(
-                    <label key={u.id} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.3rem .25rem',cursor:'pointer',fontSize:'13px',borderRadius:5,background:form.teacherIds.includes(u.id)?'var(--bg)':'transparent'}}>
-                      <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleT(u.id)}/>
-                      <span style={{fontWeight:500}}>{u.rpName||u.displayName}</span>
-                      <span style={{color:'var(--text3)',fontSize:'11px'}}>{u.rankName}</span>
-                    </label>
-                  ))}
+                <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+                  {/* Search */}
+                  <div style={{padding:'.35rem .4rem',borderBottom:'1px solid var(--border)',background:'var(--bg)'}}>
+                    <input
+                      className="form-input"
+                      placeholder="Search teachers..."
+                      style={{fontSize:'12px',padding:'.25rem .5rem',height:'auto'}}
+                      onChange={e => {
+                        const val = e.target.value.toLowerCase();
+                        const rows = e.target.closest('.teacher-list').querySelectorAll('.teacher-row');
+                        rows.forEach(row => {
+                          row.style.display = row.dataset.name.includes(val) ? '' : 'none';
+                        });
+                      }}
+                    />
+                  </div>
+                  {/* List */}
+                  <div className="teacher-list" style={{maxHeight:180,overflowY:'auto',padding:'.25rem'}}>
+                    {users.length === 0
+                      ? <div style={{color:'var(--text3)',fontSize:'12.5px',padding:'.5rem .25rem'}}>No active staff</div>
+                      : users.map(u=>(
+                        <label key={u.id} className="teacher-row" data-name={(u.rpName||u.displayName).toLowerCase()}
+                          style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.35rem .4rem',cursor:'pointer',fontSize:'13px',borderRadius:5,background:form.teacherIds.includes(u.id)?'#f0fdf8':'transparent',userSelect:'none'}}>
+                          <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleT(u.id)}/>
+                          <div className="avatar" style={{width:22,height:22,fontSize:9,flexShrink:0}}>{(u.displayName||'?')[0].toUpperCase()}</div>
+                          <span style={{fontWeight:500,flex:1}}>{u.rpName||u.displayName}</span>
+                          <span style={{color:'var(--text3)',fontSize:'11px',flexShrink:0}}>{u.rankName}</span>
+                        </label>
+                      ))
+                    }
+                  </div>
+                  {/* Selected count */}
+                  {form.teacherIds.length > 0 && (
+                    <div style={{padding:'.3rem .6rem',borderTop:'1px solid var(--border)',background:'#f0fdf8',fontSize:'11.5px',color:'var(--teal)',fontWeight:500}}>
+                      ✓ {form.teacherIds.length} teacher{form.teacherIds.length!==1?'s':''} selected
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
