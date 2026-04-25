@@ -4623,12 +4623,13 @@ function ManageCourses({ profile }) {
   const [allPeriods, setAllPeriods] = useState([]); // full objects from Firestore
   const [modal, setModal]     = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm]       = useState({name:'',type:'core',teacherIds:[],grades:[],period:'',dept:''});
+  const [form, setForm]       = useState({name:'',type:'core',teacherIds:[],grades:[],period:'',dept:'',room:''});
   const [saving, setSaving]   = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [schedResult, setSchedResult] = useState(null);
-  const [dragging, setDragging] = useState(null); // course being dragged
-  const [dragOver, setDragOver] = useState(null); // {period, grade}
+  const [dragging, setDragging] = useState(null);
+  const [dragOver, setDragOver] = useState(null);
+  const [teacherSearch, setTeacherSearch] = useState('');
   const dragRef = useRef(null);
   const dragOverRef = useRef(null);
 
@@ -4690,8 +4691,8 @@ function ManageCourses({ profile }) {
   const notVisible    = courses.filter(c => c.period && !visibleIds.has(c.id));
 
   // ── Course CRUD ──
-  const openNew  = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:'',dept:''}); setModal(true); };
-  const openEdit = c  => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||'',dept:c.dept||''}); setModal(true); };
+  const openNew  = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:'',dept:'',room:''}); setTeacherSearch(''); setModal(true); };
+  const openEdit = c  => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||'',dept:c.dept||'',room:c.room||''}); setTeacherSearch(''); setModal(true); };
   const toggleT  = uid => setForm(f=>({...f,teacherIds:f.teacherIds.includes(uid)?f.teacherIds.filter(x=>x!==uid):[...f.teacherIds,uid]}));
 
   const saveCourse = async () => {
@@ -4883,6 +4884,7 @@ function ManageCourses({ profile }) {
           <div style={{display:'flex',gap:3,marginTop:1,alignItems:'center'}}>
             {c.dept && <span style={{fontSize:'9px',color:borderColor,fontWeight:600}}>{c.dept}</span>}
             {displayGrade && <span style={{fontSize:'9px',fontWeight:700,padding:'0 4px',borderRadius:3,background:GRADE_COLORS[displayGrade]+'22',color:GRADE_COLORS[displayGrade],marginLeft:c.dept?4:0}}>Gr{displayGrade}</span>}
+            {c.room && <span style={{fontSize:'9px',color:'var(--text3)',marginLeft:2}}>· Rm {c.room}</span>}
           </div>
         </div>
         {inCell && <button onClick={e=>{e.stopPropagation();removeFromCell(c);}} style={{background:'none',border:'none',cursor:'pointer',color:'#bbb',padding:'0 2px',fontSize:13,lineHeight:1,flexShrink:0}}>×</button>}
@@ -5088,7 +5090,7 @@ function ManageCourses({ profile }) {
                   </div>
                   <div className="table-scroll">
                     <table>
-                      <thead><tr><th style={{width:28}}></th><th>Course</th><th>Type</th><th>Grades</th><th>Period</th><th>Teachers</th><th></th></tr></thead>
+                      <thead><tr><th style={{width:28}}></th><th>Course</th><th>Type</th><th>Grades</th><th>Room</th><th>Period</th><th>Teachers</th><th></th></tr></thead>
                       <tbody>
                         {list.map((c,i)=>(
                           <tr key={c.id} draggable
@@ -5112,6 +5114,7 @@ function ManageCourses({ profile }) {
                                 </span>
                               ))}
                             </td>
+                            <td style={{fontSize:'12px',fontWeight:600,color:'var(--text2)'}}>{c.room ? <span style={{background:'var(--bg)',border:'1px solid var(--border)',borderRadius:5,padding:'2px 7px',fontSize:'11px'}}>Rm {c.room}</span> : <span style={{color:'var(--text3)'}}>—</span>}</td>
                             <td>{c.period?<span style={{color:'var(--teal)',fontWeight:600,fontSize:'12px'}}>{c.period}</span>:<span style={{color:'var(--text3)',fontSize:'12px'}}>—</span>}</td>
                             <td style={{fontSize:'12px',color:'var(--text2)',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
                               {(c.teacherIds||[]).map(id=>users.find(u=>u.id===id)?.displayName).filter(Boolean).join(', ')||<span style={{color:'var(--text3)'}}>Unassigned</span>}
@@ -5202,7 +5205,7 @@ function ManageCourses({ profile }) {
                 <label className="form-label">Course name</label>
                 <input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. English 9, Photography"/>
               </div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'.75rem'}}>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr 1fr',gap:'.75rem'}}>
                 <div className="form-group">
                   <label className="form-label">Type</label>
                   <select className="form-input form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
@@ -5224,30 +5227,27 @@ function ManageCourses({ profile }) {
                     {teachPeriodNames.map(p=><option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
+                <div className="form-group">
+                  <label className="form-label">Room #</label>
+                  <input className="form-input" value={form.room} onChange={e=>setForm(f=>({...f,room:e.target.value}))} placeholder="e.g. 117"/>
+                </div>
               </div>              <div className="form-group">
                 <label className="form-label">Teachers</label>
                 <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
-                  {/* Search */}
                   <div style={{padding:'.35rem .4rem',borderBottom:'1px solid var(--border)',background:'var(--bg)'}}>
                     <input
                       className="form-input"
                       placeholder="Search teachers..."
+                      value={teacherSearch}
+                      onChange={e=>setTeacherSearch(e.target.value)}
                       style={{fontSize:'12px',padding:'.25rem .5rem',height:'auto'}}
-                      onChange={e => {
-                        const val = e.target.value.toLowerCase();
-                        const rows = e.target.closest('.teacher-list').querySelectorAll('.teacher-row');
-                        rows.forEach(row => {
-                          row.style.display = row.dataset.name.includes(val) ? '' : 'none';
-                        });
-                      }}
                     />
                   </div>
-                  {/* List */}
-                  <div className="teacher-list" style={{maxHeight:180,overflowY:'auto',padding:'.25rem'}}>
-                    {users.length === 0
-                      ? <div style={{color:'var(--text3)',fontSize:'12.5px',padding:'.5rem .25rem'}}>No active staff</div>
-                      : users.map(u=>(
-                        <label key={u.id} className="teacher-row" data-name={(u.rpName||u.displayName).toLowerCase()}
+                  <div style={{maxHeight:180,overflowY:'auto',padding:'.25rem'}}>
+                    {users
+                      .filter(u => (u.rpName||u.displayName||'').toLowerCase().includes(teacherSearch.toLowerCase()))
+                      .map(u=>(
+                        <label key={u.id}
                           style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.35rem .4rem',cursor:'pointer',fontSize:'13px',borderRadius:5,background:form.teacherIds.includes(u.id)?'#f0fdf8':'transparent',userSelect:'none'}}>
                           <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleT(u.id)}/>
                           <div className="avatar" style={{width:22,height:22,fontSize:9,flexShrink:0}}>{(u.displayName||'?')[0].toUpperCase()}</div>
@@ -5256,8 +5256,10 @@ function ManageCourses({ profile }) {
                         </label>
                       ))
                     }
+                    {users.filter(u=>(u.rpName||u.displayName||'').toLowerCase().includes(teacherSearch.toLowerCase())).length===0&&(
+                      <div style={{color:'var(--text3)',fontSize:'12px',padding:'.5rem .4rem'}}>No teachers match "{teacherSearch}"</div>
+                    )}
                   </div>
-                  {/* Selected count */}
                   {form.teacherIds.length > 0 && (
                     <div style={{padding:'.3rem .6rem',borderTop:'1px solid var(--border)',background:'#f0fdf8',fontSize:'11.5px',color:'var(--teal)',fontWeight:500}}>
                       ✓ {form.teacherIds.length} teacher{form.teacherIds.length!==1?'s':''} selected
