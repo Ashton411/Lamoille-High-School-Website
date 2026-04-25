@@ -1337,7 +1337,7 @@ function Dashboard({ profile }) {
 
   useEffect(() => {
     const fetchCounts = async () => {
-      const [s, a, t, d] = await Promise.all([
+      const [s, a, d] = await Promise.all([
         db.collection('users').where('status','==','active').get(),
         db.collection('attendance').get(),
         db.collection('disciplinary').get(),
@@ -4630,13 +4630,10 @@ function ManageCourses({ profile }) {
     });
     db.collection('users').onSnapshot(s => setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active')));
     db.collection('settings').doc('bell_schedule').onSnapshot(doc => {
+      // Store ALL periods from Firestore for the grid display
+      // The grid shows every row; non-teaching rows (lunch, homeroom etc) are just greyed out
       const raw = (doc.exists && doc.data().periods?.length) ? doc.data().periods : BELL_SCHEDULE;
-      const teaching = raw
-        .filter(b => b.type !== 'break' && !isNonTeachingPeriod(b.period))
-        .map(b => b.period);
-      console.log('[BellSchedule] Raw periods:', raw.map(b=>b.period));
-      console.log('[BellSchedule] Teaching periods after filter:', teaching);
-      setBellPeriods(teaching.length > 0 ? teaching : raw.map(b=>b.period));
+      setBellPeriods(raw); // store the full period objects, not just names
     });
     return unsub;
   }, []);
@@ -4715,14 +4712,24 @@ function ManageCourses({ profile }) {
   };
 
   // ── Visual drag-drop scheduler ──
-  // grid: period → grade → courseId
-  // All useState hooks must be declared before useMemo
   const [draggingCourse, setDraggingCourse] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
 
+  // bellPeriods now holds full period objects {period, realStart, realEnd, ...}
+  // allGridPeriods = all period names in order from bell schedule
+  const allGridPeriods = useMemo(() => {
+    const fromBell = bellPeriods.map(b => typeof b === 'string' ? b : b.period);
+    // Also include any periods assigned to courses that aren't in the bell schedule
+    const fromCourses = [...new Set(courses.filter(c=>c.period).map(c=>c.period))];
+    const merged = [...fromBell];
+    fromCourses.forEach(p => { if (!merged.includes(p)) merged.push(p); });
+    if (merged.length === 0) return ['1st Period','2nd Period','3rd Period','4th Period','5th Period','6th Period'];
+    return merged;
+  }, [bellPeriods, courses]);
+
   const gridAssignment = useMemo(() => {
     const grid = {};
-    bellPeriods.forEach(p => { grid[p] = {}; GRADES.forEach(g => { grid[p][g] = null; }); });
+    allGridPeriods.forEach(p => { grid[p] = {}; GRADES.forEach(g => { grid[p][g] = null; }); });
     courses.forEach(c => {
       if (!c.period) return;
       const grades = c.grades?.length>0 ? c.grades : inferGradesFromName(c.name);
@@ -4732,7 +4739,7 @@ function ManageCourses({ profile }) {
       }
     });
     return grid;
-  }, [courses, bellPeriods]);
+  }, [courses, allGridPeriods]);
 
   const unscheduled = courses.filter(c => !c.period);
 
@@ -4839,7 +4846,7 @@ function ManageCourses({ profile }) {
               </div>
             </div>
 
-            {bellPeriods.length===0 ? (
+            {allGridPeriods.length===0 ? (
               <div className="empty"><span className="empty-icon">🔔</span><div className="empty-text">No periods configured</div><div className="empty-sub">Set up your Bell Schedule first</div></div>
             ) : (
               <div style={{overflowX:'auto'}}>
@@ -4855,50 +4862,69 @@ function ManageCourses({ profile }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {bellPeriods.map((period,pi) => (
-                      <tr key={period} style={{borderBottom:'1px solid var(--border)'}}>
-                        {/* Period label */}
-                        <td style={{
-                          padding:'.5rem .85rem',fontWeight:600,fontSize:'12px',color:'var(--navy)',
-                          background:pi%2===0?'var(--bg)':'#f5f5f2',
-                          borderRight:'2px solid var(--border)',
-                          position:'sticky',left:0,zIndex:2,whiteSpace:'nowrap',
-                        }}>{period}</td>
-                        {/* Grade cells */}
-                        {GRADES.map(g => {
-                          const cellCourse = gridAssignment[period]?.[g];
-                          const isTarget = dropTarget?.period===period && dropTarget?.grade===g;
-                          return (
-                            <td key={g}
-                              onDragOver={e=>{e.preventDefault();setDropTarget({period,grade:g});}}
-                              onDragLeave={()=>setDropTarget(null)}
-                              onDrop={async e=>{
-                                e.preventDefault();setDropTarget(null);
-                                if(draggingCourse) await dropCourseIntoCell(period,g,draggingCourse);
-                              }}
-                              style={{
-                                padding:'.35rem .4rem',
-                                verticalAlign:'top',
-                                background: isTarget
-                                  ? 'rgba(29,158,117,.08)'
-                                  : pi%2===0?'var(--white)':'#fafaf9',
-                                border: isTarget?`2px dashed var(--teal)`:`1px solid var(--border)`,
-                                transition:'all .1s',
-                                minHeight:52,
-                              }}
-                            >
-                              {cellCourse ? (
-                                <CourseChip course={cellCourse} inCell={true} onRemove={removeCourseFromPeriod}/>
-                              ) : (
-                                <div style={{height:44,display:'flex',alignItems:'center',justifyContent:'center',color:isTarget?'var(--teal)':'#d1d5db',fontSize:'11px',fontStyle:'italic'}}>
-                                  {isTarget?'Drop here':'—'}
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
+                    {allGridPeriods.map((period,pi) => {
+                      // Get the full bell period object for times
+                      const bellObj = bellPeriods.find(b => (typeof b==='string'?b:b.period) === period);
+                      const periodName = typeof bellObj==='string' ? bellObj : (bellObj?.period || period);
+                      const realTime = bellObj?.realStart ? `${bellObj.realStart}–${bellObj.realEnd}` : null;
+                      const gameTime = bellObj?.gameStart ? `${bellObj.gameStart}–${bellObj.gameEnd}` : null;
+                      const isNonTeach = isNonTeachingPeriod(period);
+
+                      return (
+                        <tr key={period} style={{borderBottom:'1px solid var(--border)',opacity:isNonTeach?0.55:1}}>
+                          {/* Period label */}
+                          <td style={{
+                            padding:'.5rem .85rem',fontWeight:600,fontSize:'12px',color:'var(--navy)',
+                            background:isNonTeach?'#f0f0ee':pi%2===0?'var(--bg)':'#f5f5f2',
+                            borderRight:'2px solid var(--border)',
+                            position:'sticky',left:0,zIndex:2,whiteSpace:'nowrap',
+                          }}>
+                            <div>{periodName}</div>
+                            {realTime && <div style={{fontSize:'9.5px',color:'var(--text3)',fontWeight:400,marginTop:'1px'}}>⏰ {realTime}</div>}
+                            {gameTime && <div style={{fontSize:'9.5px',color:'var(--text3)',fontWeight:400}}>🎮 {gameTime}</div>}
+                          </td>
+                          {/* Grade cells */}
+                          {GRADES.map(g => {
+                            const cellCourse = gridAssignment[period]?.[g];
+                            const isTarget = !isNonTeach && dropTarget?.period===period && dropTarget?.grade===g;
+                            return (
+                              <td key={g}
+                                onDragOver={e=>{ if(!isNonTeach){e.preventDefault();setDropTarget({period,grade:g});}}}
+                                onDragLeave={()=>setDropTarget(null)}
+                                onDrop={async e=>{
+                                  if(isNonTeach) return;
+                                  e.preventDefault();setDropTarget(null);
+                                  if(draggingCourse) await dropCourseIntoCell(period,g,draggingCourse);
+                                }}
+                                style={{
+                                  padding:'.35rem .4rem',
+                                  verticalAlign:'top',
+                                  background: isNonTeach ? '#f5f4f1'
+                                    : isTarget ? 'rgba(29,158,117,.08)'
+                                    : pi%2===0?'var(--white)':'#fafaf9',
+                                  border: isTarget?`2px dashed var(--teal)`:`1px solid var(--border)`,
+                                  transition:'all .1s',
+                                  minHeight:52,
+                                  cursor: isNonTeach ? 'not-allowed' : 'default',
+                                }}
+                              >
+                                {isNonTeach ? (
+                                  <div style={{height:44,display:'flex',alignItems:'center',justifyContent:'center',color:'#ccc',fontSize:'10px'}}>
+                                    {period.toLowerCase().includes('lunch') ? '🍽️' : period.toLowerCase().includes('homeroom') ? '🏠' : '—'}
+                                  </div>
+                                ) : cellCourse ? (
+                                  <CourseChip course={cellCourse} inCell={true} onRemove={removeCourseFromPeriod}/>
+                                ) : (
+                                  <div style={{height:44,display:'flex',alignItems:'center',justifyContent:'center',color:isTarget?'var(--teal)':'#d1d5db',fontSize:'11px',fontStyle:'italic'}}>
+                                    {isTarget?'Drop here':'—'}
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -5168,7 +5194,7 @@ function ManageCourses({ profile }) {
                   <label className="form-label">Period</label>
                   <select className="form-input form-select" value={form.period} onChange={e=>setForm(f=>({...f,period:e.target.value}))}>
                     <option value="">— No period —</option>
-                    {bellPeriods.map(p=><option key={p} value={p}>{p}</option>)}
+                    {allGridPeriods.filter(p=>!isNonTeachingPeriod(p)).map(p=><option key={p} value={p}>{p}</option>)}
                   </select>
                 </div>
               </div>
