@@ -4564,62 +4564,57 @@ function autoSchedule(courses, periods) {
 const GRADE_COLORS = {'9':'#3b82f6','10':'#8b5cf6','11':'#ec4899','12':'#f59e0b'};
 const GRADES_ALL   = ['9','10','11','12'];
 
-// ── Lamoille High School Official Curriculum ──
+// ══════════════════════════════════════════════════════
+// LHS CURRICULUM — 24 slots exactly
+// 4 grades × 6 classes = 24
+// Each grade: 4 required core + 2 electives
+// Some electives repeat across grades (same course, different grade column)
+// ══════════════════════════════════════════════════════
 const LHS_CURRICULUM = [
-  // ENGLISH
-  {name:'English 9',             type:'core',     grades:['9'],            dept:'English'},
-  {name:'English 10',            type:'core',     grades:['10'],           dept:'English'},
-  {name:'English 11',            type:'core',     grades:['11'],           dept:'English'},
-  {name:'English 12',            type:'core',     grades:['12'],           dept:'English'},
-  {name:'Creative Writing',      type:'elective', grades:['11','12'],      dept:'English'},
-  {name:'Speech & Debate',       type:'elective', grades:['10','11','12'], dept:'English'},
-  // MATH
-  {name:'Algebra 1',             type:'core',     grades:['9'],            dept:'Math'},
-  {name:'Geometry',              type:'core',     grades:['10'],           dept:'Math'},
-  {name:'Algebra 2',             type:'core',     grades:['11'],           dept:'Math'},
-  {name:'Pre-Calculus',          type:'core',     grades:['12'],           dept:'Math'},
-  {name:'Statistics',            type:'elective', grades:['11','12'],      dept:'Math'},
-  // SCIENCE
-  {name:'Earth Science',         type:'core',     grades:['9'],            dept:'Science'},
-  {name:'Biology',               type:'core',     grades:['10'],           dept:'Science'},
-  {name:'Chemistry',             type:'core',     grades:['11'],           dept:'Science'},
-  {name:'Physics',               type:'core',     grades:['12'],           dept:'Science'},
-  {name:'Anatomy & Physiology',  type:'elective', grades:['11','12'],      dept:'Science'},
-  {name:'Environmental Science', type:'elective', grades:['11','12'],      dept:'Science'},
-  // SOCIAL STUDIES
-  {name:'World History',         type:'core',     grades:['9'],            dept:'Social Studies'},
-  {name:'U.S. History',          type:'core',     grades:['10'],           dept:'Social Studies'},
-  {name:'U.S. Government',       type:'core',     grades:['11'],           dept:'Social Studies'},
-  {name:'Economics',             type:'core',     grades:['12'],           dept:'Social Studies'},
-  {name:'Psychology',            type:'elective', grades:['11','12'],      dept:'Social Studies'},
-  {name:'Sociology',             type:'elective', grades:['11','12'],      dept:'Social Studies'},
-  // WORLD LANGUAGE
-  {name:'Spanish 1',             type:'core',     grades:['9','10'],       dept:'World Language'},
-  {name:'Spanish 2',             type:'core',     grades:['10','11'],      dept:'World Language'},
-  {name:'Spanish 3',             type:'elective', grades:['11','12'],      dept:'World Language'},
-  {name:'French 1',              type:'core',     grades:['9','10'],       dept:'World Language'},
-  {name:'French 2',              type:'elective', grades:['10','11'],      dept:'World Language'},
-  // PE & HEALTH
-  {name:'Physical Education 9',  type:'core',     grades:['9'],            dept:'PE & Health'},
-  {name:'Physical Education 10', type:'core',     grades:['10'],           dept:'PE & Health'},
-  {name:'Health',                type:'core',     grades:['11'],           dept:'PE & Health'},
-  {name:'Fitness & Wellness',    type:'elective', grades:['12'],           dept:'PE & Health'},
-  // FINE ARTS
-  {name:'Art 1',                 type:'elective', grades:['9','10'],       dept:'Fine Arts'},
-  {name:'Art 2',                 type:'elective', grades:['10','11'],      dept:'Fine Arts'},
-  {name:'Photography',           type:'elective', grades:['10','11','12'], dept:'Fine Arts'},
-  {name:'Drama',                 type:'elective', grades:['9','10','11','12'], dept:'Fine Arts'},
-  {name:'Band',                  type:'elective', grades:['9','10','11','12'], dept:'Fine Arts'},
-  {name:'Chorus',                type:'elective', grades:['9','10','11','12'], dept:'Fine Arts'},
-  // CTE
-  {name:'Culinary Arts 1',       type:'elective', grades:['10','11'],      dept:'CTE'},
-  {name:'Culinary Arts 2',       type:'elective', grades:['11','12'],      dept:'CTE'},
-  {name:'Personal Finance',      type:'elective', grades:['11','12'],      dept:'CTE'},
-  {name:'Business Principles',   type:'elective', grades:['10','11'],      dept:'CTE'},
-  {name:'Computer Science',      type:'elective', grades:['10','11','12'], dept:'CTE'},
-  {name:'Health Sciences',       type:'elective', grades:['10','11','12'], dept:'CTE'},
-  {name:'Criminal Justice',      type:'elective', grades:['11','12'],      dept:'CTE'},
+
+  // ── 9th Grade (6 classes) ──────────────────────────
+  // Core (required)
+  {name:'English 9',         type:'core',     grades:['9'],  dept:'English',        slot:'9-core'},
+  {name:'Algebra 1',         type:'core',     grades:['9'],  dept:'Math',           slot:'9-core'},
+  {name:'Earth Science',     type:'core',     grades:['9'],  dept:'Science',        slot:'9-core'},
+  {name:'World History',     type:'core',     grades:['9'],  dept:'Social Studies', slot:'9-core'},
+  // Electives (2 slots)
+  {name:'Band',              type:'elective', grades:['9'],  dept:'Fine Arts',      slot:'9-elective'},
+  {name:'Drama',             type:'elective', grades:['9'],  dept:'Fine Arts',      slot:'9-elective'},
+
+  // ── 10th Grade (6 classes) ─────────────────────────
+  // Core (required)
+  {name:'English 10',        type:'core',     grades:['10'], dept:'English',        slot:'10-core'},
+  {name:'Geometry',          type:'core',     grades:['10'], dept:'Math',           slot:'10-core'},
+  {name:'Biology',           type:'core',     grades:['10'], dept:'Science',        slot:'10-core'},
+  {name:'U.S. History',      type:'core',     grades:['10'], dept:'Social Studies', slot:'10-core'},
+  // Electives (2 slots)
+  {name:'Photography',       type:'elective', grades:['10'], dept:'Fine Arts',      slot:'10-elective'},
+  {name:'Culinary Arts',     type:'elective', grades:['10'], dept:'CTE',            slot:'10-elective'},
+
+  // ── 11th Grade (6 classes) ─────────────────────────
+  // Core (required)
+  {name:'English 11',        type:'core',     grades:['11'], dept:'English',        slot:'11-core'},
+  {name:'Algebra 2',         type:'core',     grades:['11'], dept:'Math',           slot:'11-core'},
+  {name:'Chemistry',         type:'core',     grades:['11'], dept:'Science',        slot:'11-core'},
+  {name:'U.S. Government',   type:'core',     grades:['11'], dept:'Social Studies', slot:'11-core'},
+  // Electives (2 slots)
+  {name:'Photography',       type:'elective', grades:['11'], dept:'Fine Arts',      slot:'11-elective'},
+  {name:'Health Sciences',   type:'elective', grades:['11'], dept:'CTE',            slot:'11-elective'},
+
+  // ── 12th Grade (6 classes) ─────────────────────────
+  // Core (required)
+  {name:'English 12',        type:'core',     grades:['12'], dept:'English',        slot:'12-core'},
+  {name:'Pre-Calculus',      type:'core',     grades:['12'], dept:'Math',           slot:'12-core'},
+  {name:'Physics',           type:'core',     grades:['12'], dept:'Science',        slot:'12-core'},
+  {name:'Economics',         type:'core',     grades:['12'], dept:'Social Studies', slot:'12-core'},
+  // Electives (2 slots)
+  {name:'Band',              type:'elective', grades:['12'], dept:'Fine Arts',      slot:'12-elective'},
+  {name:'Health Sciences',   type:'elective', grades:['12'], dept:'CTE',            slot:'12-elective'},
+
 ];
+// Total: 24 courses (6 per grade × 4 grades)
+// Repeating electives: Photography (Gr10+11), Band (Gr9+12), Health Sciences (Gr11+12)
 
 function ManageCourses({ profile }) {
   const [tab, setTab]         = useState('grid');
@@ -4784,7 +4779,9 @@ function ManageCourses({ profile }) {
   // ── Split combined courses ──
   const seedCurriculum = async () => {
     if (!confirm(
-      `This will REPLACE all existing courses with the official LHS curriculum (${LHS_CURRICULUM.length} courses).\n\n` +
+      `This will REPLACE all existing courses with the official LHS curriculum.\n\n` +
+      `24 courses total — 4 grades × 6 classes each\n` +
+      `Each grade: 4 core (required) + 2 electives\n\n` +
       `Teacher assignments and period placements will be cleared.\n\n` +
       `Are you sure?`
     )) return;
@@ -4816,7 +4813,7 @@ function ManageCourses({ profile }) {
     await addBatch.commit();
     await addLog(profile.id, profile.displayName, 'Loaded official LHS curriculum', `${LHS_CURRICULUM.length} courses`);
     setSaving(false);
-    alert(`✓ ${LHS_CURRICULUM.length} courses loaded! Now assign teachers in Course List, then use Auto-Schedule.`);
+    alert(`✓ 24 courses loaded (4 grades × 6 classes)!\n\nNext steps:\n1. Assign teachers in Course List\n2. Run Auto-Schedule\n3. Adjust in Schedule Grid`);
   };
 
   const splitCourse = async c => {
@@ -5035,7 +5032,7 @@ function ManageCourses({ profile }) {
           <div style={{background:'linear-gradient(135deg,#0B1F4A,#0a2a1e)',borderRadius:'var(--radius)',padding:'1rem 1.5rem',marginBottom:'1.25rem',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'1rem',flexWrap:'wrap'}}>
             <div>
               <div style={{color:'white',fontWeight:600,fontSize:'14px'}}>📚 Official LHS Curriculum</div>
-              <div style={{color:'rgba(255,255,255,.5)',fontSize:'12px',marginTop:'2px'}}>{LHS_CURRICULUM.length} courses · English, Math, Science, Social Studies, Languages, PE, Arts, CTE</div>
+              <div style={{color:'rgba(255,255,255,.5)',fontSize:'12px',marginTop:'2px'}}>24 courses · 4 grades × 6 classes · 4 core + 2 electives per grade</div>
             </div>
             <button
               className="btn btn-sm"
