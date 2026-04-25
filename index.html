@@ -2828,703 +2828,6 @@ function CreateUser({ profile }) {
 //     - Falls back to type (core → all grades, elective → all grades)
 // ══════════════════════════════════════════════════════
 
-function inferGradesFromName(name) {
-  const grades = [];
-  const text = name.toLowerCase();
-  if (/\b9(th)?\b/.test(text))  grades.push('9');
-  if (/\b10(th)?\b/.test(text)) grades.push('10');
-  if (/\b11(th)?\b/.test(text)) grades.push('11');
-  if (/\b12(th)?\b/.test(text)) grades.push('12');
-  if (/freshman/.test(text))    grades.push('9');
-  if (/sophomore/.test(text))   grades.push('10');
-  if (/junior/.test(text))      grades.push('11');
-  if (/senior/.test(text))      grades.push('12');
-  if (/\bap\b|advanced/.test(text) && grades.length === 0) grades.push('11','12');
-  if (/honor/.test(text) && grades.length === 0) grades.push('10','11','12');
-  return [...new Set(grades)];
-}
-
-function autoScheduleCourses(courses, availablePeriods) {
-  // ─────────────────────────────────────────────────────────────────
-  // MODEL (matches the LHS bell schedule image):
-  //   • Each period has exactly ONE slot per grade (9/10/11/12)
-  //   • A grade's slot for a period = one course
-  //   • Same teacher can't teach two classes in the same period
-  //   • A course with grades [9] only occupies the grade-9 slot
-  //   • A course with grades [9,10] occupies BOTH the grade-9 AND grade-10 slot
-  //     in the same period (co-taught / combined class)
-  //
-  // ALGORITHM: greedy CSP with backtracking
-  //   1. Infer grades from name if not set
-  //   2. Sort by most-constrained first (single-grade courses first,
-  //      then fewest-teacher courses — they have the least flexibility)
-  //   3. For each course, find valid periods where:
-  //        - no teacher conflict
-  //        - no grade-slot already taken
-  //   4. Assign to least-loaded valid period; backtrack if stuck
-  //   5. Courses that truly can't fit are returned as conflicts
-  // ─────────────────────────────────────────────────────────────────
-
-  const ALL_GRADES = ['9','10','11','12'];
-
-  // Step 1: enrich — infer grades from name
-  const enriched = courses.map(c => {
-    let grades = (c.grades && c.grades.length > 0) ? [...c.grades] : inferGradesFromName(c.name);
-    // Single-grade name inference: "English 9" → ['9'], not ['9','10','11','12']
-    // Only fall back to all-grades if truly no indicator at all
-    if (grades.length === 0) grades = [...ALL_GRADES];
-    return { ...c, grades };
-  });
-
-  // Step 2: sort — most constrained first
-  // Most constrained = single grade (conflicts with more other single-grade courses)
-  //                  + fewer teachers (less flexibility in assignment)
-  const sorted = [...enriched].sort((a, b) => {
-    const gradeDiff = a.grades.length - b.grades.length;
-    if (gradeDiff !== 0) return gradeDiff; // single-grade first
-    return (a.teacherIds||[]).length - (b.teacherIds||[]).length; // fewer teachers first
-  });
-
-  const assigned = [];
-  const conflicts = [];
-
-  // State: immutable maps passed through recursion for clean backtracking
-  // gradeSlots[grade][period] = true  → that grade's period slot is taken
-  // teacherSlots[teacherId][period] = true → teacher busy that period
-  const initGradeSlots = () => {
-    const m = {};
-    ALL_GRADES.forEach(g => { m[g] = {}; });
-    return m;
-  };
-  const initTeacherSlots = () => ({});
-  const initPeriodLoad = () => {
-    const m = {};
-    availablePeriods.forEach(p => { m[p] = 0; });
-    return m;
-  };
-
-  function cloneGradeSlots(gs) {
-    const m = {};
-    ALL_GRADES.forEach(g => { m[g] = { ...gs[g] }; });
-    return m;
-  }
-
-  function tryAssign(idx, gradeSlots, teacherSlots, periodLoad) {
-    if (idx === sorted.length) return true;
-
-    const course = sorted[idx];
-    const teachers = course.teacherIds || [];
-    const grades = course.grades;
-
-    // Valid periods: none of this course's grades are taken AND no teacher conflict
-    const validPeriods = availablePeriods.filter(period => {
-      // Teacher conflict check
-      for (const tid of teachers) {
-        if (teacherSlots[tid] && teacherSlots[tid][period]) return false;
-      }
-      // Grade slot conflict check — ALL grades this course needs must be free
-      for (const g of grades) {
-        if (gradeSlots[g] && gradeSlots[g][period]) return false;
-      }
-      return true;
-    });
-
-    if (validPeriods.length === 0) {
-      // Truly can't schedule — record conflict, skip, keep going
-      conflicts.push(course.name);
-      return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
-    }
-
-    // Try periods in order of least load (spread the schedule evenly)
-    const ordered = [...validPeriods].sort((a, b) => (periodLoad[a]||0) - (periodLoad[b]||0));
-
-    for (const period of ordered) {
-      // Clone state for this branch
-      const newGradeSlots = cloneGradeSlots(gradeSlots);
-      const newTeacherSlots = { ...teacherSlots };
-      const newPeriodLoad = { ...periodLoad };
-
-      // Mark grade slots
-      for (const g of grades) {
-        newGradeSlots[g][period] = true;
-      }
-      // Mark teacher slots
-      for (const tid of teachers) {
-        newTeacherSlots[tid] = { ...(newTeacherSlots[tid]||{}), [period]: true };
-      }
-      newPeriodLoad[period] = (newPeriodLoad[period]||0) + 1;
-
-      assigned.push({ ...course, period });
-      if (tryAssign(idx + 1, newGradeSlots, newTeacherSlots, newPeriodLoad)) return true;
-
-      // Backtrack
-      assigned.pop();
-    }
-
-    // All periods failed — conflict
-    conflicts.push(course.name);
-    return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
-  }
-
-  tryAssign(0, initGradeSlots(), initTeacherSlots(), initPeriodLoad());
-
-  // Deduplicate conflicts (course may have been pushed multiple times on backtrack)
-  const uniqueConflicts = [...new Set(conflicts)];
-  // Remove any that ended up assigned via a later branch
-  const assignedIds = new Set(assigned.map(c => c.id));
-  const finalConflicts = uniqueConflicts.filter(name => !assigned.find(c => c.name === name));
-
-  return { assigned, conflicts: finalConflicts };
-}
-
-function ManageCourses({ profile }) {
-  const [courses, setCourses] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [modal, setModal] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name:'', type:'core', teacherIds:[], grades:[], period:'' });
-  const [saving, setSaving] = useState(false);
-  const [scheduling, setScheduling] = useState(false);
-  const [scheduleResult, setScheduleResult] = useState(null);
-  const [showResult, setShowResult] = useState(false);
-  const [bellPeriods, setBellPeriods] = useState([]);
-  const dragItem = useRef(null);
-  const dragOver = useRef(null);
-
-  const NON_TEACHING_RE = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
-
-  useEffect(() => {
-    const unsub = db.collection('courses').orderBy('sortOrder').onSnapshot(s => {
-      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
-      docs.sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
-      setCourses(docs);
-    });
-    db.collection('users').onSnapshot(s => setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active')));
-    // Load bell schedule for period picker
-    db.collection('settings').doc('bell_schedule').get().then(doc => {
-      const raw = (doc.exists && doc.data().periods?.length) ? doc.data().periods : BELL_SCHEDULE;
-      const teaching = raw
-        .filter(b => b.type !== 'break' && !NON_TEACHING_RE.test(b.period))
-        .map(b => b.period);
-      setBellPeriods(teaching.length > 0 ? teaching : ['1st Period','2nd Period','3rd Period','4th Period','5th Period','6th Period','7th Period']);
-    });
-    return unsub;
-  }, []);
-
-  // ── Auto-schedule: run CSP then write results to Firestore ──
-  const runAutoSchedule = async () => {
-    setScheduling(true);
-    setScheduleResult(null);
-
-    // Load bell schedule from Firestore (teaching periods only)
-    const bellDoc = await db.collection('settings').doc('bell_schedule').get();
-    let bells = BELL_SCHEDULE;
-    if (bellDoc.exists && bellDoc.data().periods?.length) bells = bellDoc.data().periods;
-
-    // Exclude non-teaching periods — check both type field AND name patterns
-    // This handles bells saved from the editor which may not have a type field
-    const NON_TEACHING = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
-    const teachingPeriods = bells
-      .filter(b => b.type !== 'break')
-      .filter(b => !NON_TEACHING.test(b.period))
-      .map(b => b.period);
-
-    const result = autoScheduleCourses(courses, teachingPeriods);
-    result.bellPeriods = teachingPeriods; // pass period order to result modal
-
-    // Write assignments back to Firestore
-    const batch = db.batch();
-    for (const c of result.assigned) {
-      const inferredGrades = c.grades && c.grades.length > 0 ? c.grades : inferGradesFromName(c.name);
-      const finalGrades = inferredGrades.length > 0 ? inferredGrades : ['9','10','11','12'];
-      batch.update(db.collection('courses').doc(c.id), {
-        period: c.period,
-        grades: finalGrades,
-      });
-    }
-    await batch.commit();
-    await addLog(profile.id, profile.displayName, 'Auto-scheduled courses', `${result.assigned.length} assigned, ${result.conflicts.length} conflicts`);
-
-    setScheduleResult(result);
-    setShowResult(true);
-    setScheduling(false);
-  };
-
-  const openNew = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:''}); setModal(true); };
-  const openEdit = (c) => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||''}); setModal(true); };
-
-  const toggleTeacher = (uid) => {
-    setForm(f => ({
-      ...f,
-      teacherIds: f.teacherIds.includes(uid) ? f.teacherIds.filter(id=>id!==uid) : [...f.teacherIds, uid]
-    }));
-  };
-
-  const save = async () => {
-    if (!form.name) return;
-    setSaving(true);
-    const teacherNames = form.teacherIds.map(id => users.find(u=>u.id===id)?.displayName||'').filter(Boolean);
-    if (editing) {
-      await db.collection('courses').doc(editing.id).update({...form, teacherNames});
-      await addLog(profile.id, profile.displayName, 'Updated course', form.name);
-    } else {
-      await db.collection('courses').add({...form, teacherNames, sortOrder: courses.length, createdAt: firebase.firestore.FieldValue.serverTimestamp()});
-      await addLog(profile.id, profile.displayName, 'Created course', form.name);
-    }
-    setModal(false); setSaving(false);
-  };
-
-  const deleteCourse = async (c) => {
-    if (!confirm(`Delete course "${c.name}"?`)) return;
-    await db.collection('courses').doc(c.id).delete();
-    await addLog(profile.id, profile.displayName, 'Deleted course', c.name);
-  };
-
-  const onDragStart = (e, idx) => { dragItem.current = idx; e.currentTarget.classList.add('dragging'); };
-  const onDragEnter = (e, idx) => { dragOver.current = idx; e.currentTarget.classList.add('drag-over'); };
-  const onDragLeave = (e) => e.currentTarget.classList.remove('drag-over');
-  const onDragEnd = async (e) => {
-    e.currentTarget.classList.remove('dragging');
-    document.querySelectorAll('.drag-row').forEach(r=>r.classList.remove('drag-over'));
-    if (dragItem.current===null||dragOver.current===null||dragItem.current===dragOver.current) return;
-    const reordered = [...courses];
-    const [moved] = reordered.splice(dragItem.current,1);
-    reordered.splice(dragOver.current,0,moved);
-    dragItem.current=null; dragOver.current=null;
-    const batch = db.batch();
-    reordered.forEach((c,i)=>batch.update(db.collection('courses').doc(c.id),{sortOrder:i}));
-    await batch.commit();
-  };
-
-  const core = courses.filter(c=>c.type==='core');
-  const elective = courses.filter(c=>c.type==='elective');
-
-  return (
-    <div>
-      {/* Toolbar */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem',flexWrap:'wrap',gap:'.6rem'}}>
-        <div>
-          <div style={{fontFamily:"'Playfair Display',serif",fontSize:'15px',fontWeight:600,color:'var(--navy)'}}>Course Management</div>
-          <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'1px'}}>{courses.length} total courses · Auto-scheduler assigns periods & grades with no conflicts</div>
-        </div>
-        <div style={{display:'flex',gap:'.5rem'}}>
-          <button
-            className="btn btn-sm"
-            style={{background:'linear-gradient(135deg,#1D9E75,#0f6e56)',color:'white',border:'none',fontWeight:600}}
-            onClick={runAutoSchedule}
-            disabled={scheduling||courses.length===0}
-            title="Automatically assign periods and grade levels to all courses with no conflicts"
-          >
-            {scheduling ? <><div className="spinner" style={{width:12,height:12,marginRight:4}}/> Scheduling...</> : '⚡ Auto-schedule all courses'}
-          </button>
-          <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={13}/> New Course</button>
-        </div>
-      </div>
-
-      {/* Auto-schedule result modal */}
-      {showResult && scheduleResult && (
-        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowResult(false)}>
-          <div className="modal" style={{maxWidth:720}}>
-            <div className="modal-header">
-              <div>
-                <span className="modal-title">⚡ Auto-schedule complete</span>
-                <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>
-                  {scheduleResult.assigned.length} courses assigned · {scheduleResult.conflicts.length} conflict{scheduleResult.conflicts.length!==1?'s':''}
-                </div>
-              </div>
-              <button className="modal-close" onClick={()=>setShowResult(false)}><Icon name="x" size={14}/></button>
-            </div>
-            <div className="modal-body" style={{padding:0}}>
-              {/* Bell schedule grid — periods × grades */}
-              <div style={{overflowX:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
-                  <thead>
-                    <tr style={{background:'var(--navy)'}}>
-                      <th style={{padding:'.6rem .75rem',color:'white',textAlign:'left',fontWeight:600,width:90}}>Period</th>
-                      {['9','10','11','12'].map(g=>(
-                        <th key={g} style={{padding:'.6rem .75rem',color:'white',textAlign:'center',fontWeight:600}}>
-                          <div style={{fontSize:'13px'}}>Grade {g}</div>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      // Build lookup: period → { grade → course }
-                      const grid = {};
-                      scheduleResult.assigned.forEach(c => {
-                        if (!grid[c.period]) grid[c.period] = {};
-                        (c.grades||[]).forEach(g => { grid[c.period][g] = c; });
-                      });
-                      // Get periods in bell schedule order
-                      const bellDoc = scheduleResult.bellPeriods || [];
-                      const periods = bellDoc.length > 0
-                        ? bellDoc
-                        : [...new Set(scheduleResult.assigned.map(c=>c.period))].sort();
-                      return periods.map((period, i) => (
-                        <tr key={period} style={{background:i%2===0?'var(--white)':'var(--bg)',borderBottom:'1px solid var(--border)'}}>
-                          <td style={{padding:'.5rem .75rem',fontWeight:600,color:'var(--navy)',fontSize:'11.5px',borderRight:'2px solid var(--border)'}}>{period}</td>
-                          {['9','10','11','12'].map(g => {
-                            const c = grid[period]?.[g];
-                            return (
-                              <td key={g} style={{padding:'.4rem .5rem',textAlign:'center',verticalAlign:'middle'}}>
-                                {c ? (
-                                  <div style={{
-                                    background:c.type==='core'?'#ebf0ff':'#f0ebff',
-                                    border:`1px solid ${c.type==='core'?'#c5d0f5':'#d5c8f5'}`,
-                                    borderRadius:6,padding:'.3rem .5rem',fontSize:'11px',lineHeight:1.3,
-                                  }}>
-                                    <div style={{fontWeight:600,color:'var(--navy)'}}>{c.name}</div>
-                                  </div>
-                                ) : (
-                                  <span style={{color:'#d1d5db',fontSize:'10px'}}>—</span>
-                                )}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ));
-                    })()}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Conflicts */}
-              {scheduleResult.conflicts.length > 0 && (
-                <div style={{margin:'1rem',background:'#fff5f5',border:'1px solid #fca5a5',borderRadius:10,padding:'1rem'}}>
-                  <div style={{fontSize:'12px',fontWeight:700,color:'#c0392b',marginBottom:'.5rem'}}>⚠️ Couldn't auto-assign — assign manually:</div>
-                  {scheduleResult.conflicts.map((name,i)=>(
-                    <div key={i} style={{fontSize:'12.5px',color:'#c0392b',padding:'2px 0'}}>• {name}</div>
-                  ))}
-                  <div style={{fontSize:'11px',color:'#c0392b',marginTop:'.5rem',opacity:.8}}>
-                    These courses couldn't fit without creating a conflict. Common causes: a teacher already has every period filled, or all of a grade's period slots are taken. Assign their periods manually in the course editor.
-                  </div>
-                </div>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={()=>setShowResult(false)}>Close</button>
-              <button className="btn btn-primary" onClick={()=>setShowResult(false)}>Done ✓</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {[['Core Courses', core], ['Electives', elective]].map(([label, list]) => (
-        <div key={label} className="panel" style={{marginBottom:'1rem'}}>
-          <div className="panel-header">
-            <span className="panel-title">{label}</span>
-            <span className="badge badge-navy">{list.length} course{list.length!==1?'s':''}</span>
-          </div>
-          <div className="table-wrap">
-            <table>
-              <thead><tr><th style={{width:32}}></th><th>Course name</th><th>Period</th><th>Grades</th><th>Teachers</th><th/></tr></thead>
-              <tbody>
-                {list.length===0
-                  ? <tr><td colSpan="6"><div className="empty"><div className="empty-text">No {label.toLowerCase()} yet</div></div></td></tr>
-                  : list.map((c, idx) => (
-                    <tr key={c.id} className="drag-row" draggable
-                      onDragStart={e=>onDragStart(e, courses.indexOf(c))}
-                      onDragEnter={e=>onDragEnter(e, courses.indexOf(c))}
-                      onDragLeave={onDragLeave}
-                      onDragEnd={onDragEnd}
-                      onDragOver={e=>e.preventDefault()}
-                    >
-                      <td><span className="drag-handle">⠿</span></td>
-                      <td style={{fontWeight:500}}>{c.name}</td>
-                      <td style={{fontSize:'12px',color:'var(--text2)'}}>{c.period||<span style={{color:'var(--text3)'}}>—</span>}</td>
-                      <td>
-                        {(c.grades||[]).length>0
-                          ? (c.grades||[]).sort().map(g=><span key={g} className="badge badge-navy" style={{fontSize:'10px',marginRight:2}}>Gr {g}</span>)
-                          : <span style={{color:'var(--text3)',fontSize:'12px'}}>—</span>
-                        }
-                      </td>
-                      <td>
-                        {(c.teacherIds||[]).length === 0
-                          ? <span style={{color:'var(--text3)',fontSize:'12px'}}>No teacher assigned</span>
-                          : (c.teacherIds||[]).map(id => {
-                              const u = users.find(u=>u.id===id);
-                              return u ? <span key={id} className="course-tag-teal course-tag">{u.displayName}</span> : null;
-                            })
-                        }
-                      </td>
-                      <td style={{display:'flex',gap:'.4rem'}}>
-                        <button className="btn btn-ghost btn-sm" onClick={()=>openEdit(c)}><Icon name="edit" size={12}/></button>
-                        <button className="btn btn-danger btn-sm" onClick={()=>deleteCourse(c)}><Icon name="trash" size={12}/></button>
-                      </td>
-                    </tr>
-                  ))
-                }
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ))}
-
-      {modal && (
-        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
-          <div className="modal">
-            <div className="modal-header">
-              <span className="modal-title">{editing?'Edit Course':'New Course'}</span>
-              <button className="modal-close" onClick={()=>setModal(false)}><Icon name="x" size={14}/></button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label className="form-label">Course name</label>
-                <input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. English 9, Photography"/>
-              </div>
-              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'.75rem'}}>
-                <div className="form-group">
-                  <label className="form-label">Type</label>
-                  <select className="form-input form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
-                    <option value="core">Core course</option>
-                    <option value="elective">Elective</option>
-                  </select>
-                </div>
-                <div className="form-group">
-                  <label className="form-label">Period</label>
-                  <select className="form-input form-select" value={form.period} onChange={e=>setForm(f=>({...f,period:e.target.value}))}>
-                    <option value="">— Select period —</option>
-                    {bellPeriods.map(p=>(
-                      <option key={p} value={p}>{p}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Grade levels</label>
-                <div style={{display:'flex',gap:'.5rem'}}>
-                  {['9','10','11','12'].map(g=>(
-                    <label key={g} style={{display:'flex',alignItems:'center',gap:'.3rem',padding:'.4rem .75rem',border:`1.5px solid ${(form.grades||[]).includes(g)?'var(--navy)':'var(--border)'}`,borderRadius:8,cursor:'pointer',background:(form.grades||[]).includes(g)?'var(--navy)':'transparent',transition:'all .12s'}}>
-                      <input type="checkbox" style={{display:'none'}} checked={(form.grades||[]).includes(g)} onChange={()=>setForm(f=>({...f,grades:(f.grades||[]).includes(g)?f.grades.filter(x=>x!==g):[...(f.grades||[]),g]}))}/>
-                      <span style={{fontSize:'13px',fontWeight:600,color:(form.grades||[]).includes(g)?'white':'var(--text2)'}}>Grade {g}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Assign teachers</label>
-                <div style={{maxHeight:200,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8,padding:'.5rem'}}>
-                  {users.length===0
-                    ? <div style={{color:'var(--text3)',fontSize:'13px',padding:'.25rem'}}>No active staff yet</div>
-                    : users.map(u=>(
-                      <label key={u.id} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.35rem .25rem',cursor:'pointer',fontSize:'13px',borderRadius:6,background:form.teacherIds.includes(u.id)?'var(--bg)':'transparent'}}>
-                        <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleTeacher(u.id)}/>
-                        <span style={{fontWeight:500}}>{u.displayName}</span>
-                        <span style={{color:'var(--text3)',fontSize:'11px'}}>{u.rankName||''}</span>
-                      </label>
-                    ))
-                  }
-                </div>
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn btn-ghost" onClick={()=>setModal(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={save} disabled={saving}>{saving?<div className="spinner"/>:'Save'}</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Staff Roster ──
-function StaffRoster({ profile }) {
-  const [users, setUsers] = useState([]);
-  const [ranks, setRanks] = useState([]);
-  const [departments, setDepartments] = useState([]);
-  const [courses, setCourses] = useState([]);
-  const [search, setSearch] = useState('');
-  const [filterDept, setFilterDept] = useState('all');
-  const [saving, setSaving] = useState({});
-  const isDirector = profile.rankTier >= 6;
-
-  useEffect(() => {
-    const unsubUsers = db.collection('users').onSnapshot(s => {
-      const all = s.docs.map(d=>({id:d.id,...d.data()}))
-        .filter(u => u.status === 'active' || u.status === 'suspended')
-        .sort((a,b) => (a.displayName||'').localeCompare(b.displayName||''));
-      setUsers(all);
-    });
-    const unsubRanks = db.collection('ranks').orderBy('tier').onSnapshot(s => {
-      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
-      docs.sort((a,b) => (a.sortOrder??a.tier??0) - (b.sortOrder??b.tier??0));
-      setRanks(docs);
-    });
-    db.collection('departments').orderBy('name').get().then(s=>setDepartments(s.docs.map(d=>({id:d.id,...d.data()}))));
-    db.collection('courses').get().then(s=>setCourses(s.docs.map(d=>({id:d.id,...d.data()}))));
-    return () => { unsubUsers(); unsubRanks(); };
-  }, []);
-
-  const teacherCourseMap = {};
-  courses.forEach(c => {
-    (c.teacherIds||[]).forEach(tid => {
-      if (!teacherCourseMap[tid]) teacherCourseMap[tid] = [];
-      teacherCourseMap[tid].push(c);
-    });
-  });
-
-  const updateField = async (uid, field, value) => {
-    setSaving(s=>({...s,[uid+field]:true}));
-    await db.collection('users').doc(uid).update({ [field]: value });
-    await addLog(profile.id, profile.displayName, `Updated roster field: ${field}`, '');
-    setSaving(s=>({...s,[uid+field]:false}));
-  };
-
-  const filtered = users.filter(u =>
-    !search ||
-    u.displayName?.toLowerCase().includes(search.toLowerCase()) ||
-    u.robloxUsername?.toLowerCase().includes(search.toLowerCase()) ||
-    u.rankName?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  // Group by rank in chain-of-command order, then "Unranked" last
-  const groups = [
-    ...ranks.map(r => ({
-      id: r.id, name: r.name, color: r.color,
-      members: filtered.filter(u => u.rankId === r.id && (!filterDept || filterDept==='all' || u.departmentId===filterDept))
-    })),
-    { id:'unranked', name:'Unranked / Unassigned', color:'#ccc',
-      members: filtered.filter(u => (!u.rankId || !ranks.find(r=>r.id===u.rankId)) && (!filterDept || filterDept==='all' || u.departmentId===filterDept)) }
-  ].filter(g => g.members.length > 0);
-
-  const EditCell = ({ uid, field, value, placeholder='—' }) => {
-    const [val, setVal] = useState(value||'');
-    if (!isDirector) return <span className={val?'':'roster-cell-muted'}>{val||placeholder}</span>;
-    return (
-      <input
-        className="roster-inline-edit"
-        value={val}
-        placeholder={placeholder}
-        onChange={e=>setVal(e.target.value)}
-        onBlur={()=>{ if(val!==(value||'')) updateField(uid, field, val); }}
-        onKeyDown={e=>{ if(e.key==='Enter') e.target.blur(); }}
-        title="Click to edit"
-      />
-    );
-  };
-
-  const SelectCell = ({ uid, field, value, options, placeholder='—' }) => {
-    if (!isDirector) return <span className={value?'':'roster-cell-muted'}>{value||placeholder}</span>;
-    return (
-      <select
-        className="roster-inline-edit form-select"
-        style={{minWidth:100}}
-        value={value||''}
-        onChange={e=>updateField(uid, field, e.target.value)}
-      >
-        <option value="">{placeholder}</option>
-        {options.map(o=><option key={o} value={o}>{o}</option>)}
-      </select>
-    );
-  };
-
-  const totalStaff = filtered.length;
-
-  return (
-    <div>
-      {/* Controls */}
-      <div className="roster-controls">
-        <input className="search-input" placeholder="Search staff..." value={search} onChange={e=>setSearch(e.target.value)}/>
-        <select className="form-input form-select" style={{width:'auto',minWidth:160}} value={filterDept} onChange={e=>setFilterDept(e.target.value)}>
-          <option value="all">All departments</option>
-          {departments.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
-        </select>
-        <span style={{marginLeft:'auto',fontSize:'12px',color:'var(--text3)',fontWeight:500}}>{totalStaff} staff member{totalStaff!==1?'s':''}</span>
-        {isDirector && <span style={{fontSize:'11px',color:'var(--text3)',background:'#fffbf0',border:'1px solid #f0a500',borderRadius:6,padding:'3px 8px'}}>✏️ Click any cell to edit</span>}
-      </div>
-
-      {/* School banner */}
-      <div className="roster-wrap">
-        <div className="roster-school-header">
-          <div className="roster-school-motto">Shaping Scholars, Building Futures</div>
-        </div>
-
-        {groups.length === 0 ? (
-          <div className="empty" style={{padding:'3rem'}}><div className="empty-text">No staff found</div></div>
-        ) : groups.map((group, gi) => (
-          <div key={group.id}>
-            {/* Team header */}
-            <div className="roster-team-header">
-              <div style={{display:'flex',alignItems:'center',gap:'.6rem'}}>
-                <span style={{width:9,height:9,borderRadius:'50%',background:group.color||'#ccc',display:'inline-block',flexShrink:0}}/>
-                <span className="roster-team-name">{group.name}</span>
-              </div>
-              <span className="roster-team-count">{group.members.length} member{group.members.length!==1?'s':''}</span>
-            </div>
-
-            {/* Column headers */}
-            <table className="roster-table">
-              <thead>
-                <tr>
-                  <th style={{minWidth:160}}>Name</th>
-                  <th style={{minWidth:180}}>Job Title</th>
-                  <th style={{minWidth:180}}>Email</th>
-                  <th style={{minWidth:70}}>Room</th>
-                  <th style={{minWidth:100}}>Hire Date</th>
-                  <th style={{minWidth:120}}>Courses</th>
-                  <th style={{minWidth:160}}>Notes</th>
-                  <th style={{minWidth:80}}>Status</th>
-                  <th style={{minWidth:130}}>Experience Level</th>
-                  <th style={{minWidth:130}}>Performance Level</th>
-                </tr>
-              </thead>
-              <tbody>
-                {group.members.map((u, idx) => (
-                  <tr key={u.id}>
-                    <td>
-                      <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
-                        <div className="avatar" style={{width:24,height:24,fontSize:10,flexShrink:0}}>{(u.displayName||'?')[0].toUpperCase()}</div>
-                        <span className="roster-cell-name">{u.rpName||u.displayName||<span className="roster-cell-muted">—</span>}</span>
-                      </div>
-                    </td>
-                    <td className="roster-cell-title">
-                      <span className="roster-cell-title">{u.rankName || <span className="roster-cell-muted">—</span>}</span>
-                    </td>
-                    <td style={{fontSize:'12px',color:'var(--text3)'}}>
-                      {u.email || <span className="roster-cell-muted">—</span>}
-                    </td>
-                    <td>
-                      <EditCell uid={u.id} field="room" value={u.room} placeholder="—"/>
-                    </td>
-                    <td>
-                      <EditCell uid={u.id} field="hireDate" value={u.hireDate} placeholder="—"/>
-                    </td>
-                    <td>
-                      {(teacherCourseMap[u.id]||[]).length === 0
-                        ? <span className="roster-cell-muted">—</span>
-                        : (teacherCourseMap[u.id]||[]).map(c=>(
-                            <span key={c.id} className={`course-tag ${c.type==='elective'?'course-tag-teal':''}`}>{c.name}</span>
-                          ))
-                      }
-                    </td>
-                    <td>
-                      <EditCell uid={u.id} field="rosterNotes" value={u.rosterNotes} placeholder="Add notes..."/>
-                    </td>
-                    <td>
-                      <SelectCell uid={u.id} field="experienceStatus" value={u.experienceStatus}
-                        options={['NM','Active','Inactive','On Leave']} placeholder="NM"/>
-                    </td>
-                    <td>
-                      <SelectCell uid={u.id} field="experienceLevel" value={u.experienceLevel}
-                        options={['To Be Deemed','Novice','Developing','Proficient','Expert']} placeholder="To Be Deemed"/>
-                    </td>
-                    <td>
-                      <SelectCell uid={u.id} field="performanceLevel" value={u.performanceLevel}
-                        options={['To Be Deemed','Needs Improvement','Meets Expectations','Exceeds Expectations','Outstanding']} placeholder="To Be Deemed"/>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 // ── Announcements ──
 function Announcements({ profile }) {
   const [items, setItems] = useState([]);
@@ -3566,13 +2869,13 @@ function Announcements({ profile }) {
           <button className="btn btn-primary" onClick={()=>setModal(true)}><Icon name="plus" size={13}/> New Announcement</button>
         </div>
       )}
-      {items.length === 0 && <div className="panel"><div className="panel-body"><div className="empty"><div className="empty-icon">📢</div><div className="empty-text">No announcements yet</div></div></div></div>}
+      {items.length === 0 && <div className="panel"><div className="panel-body"><div className="empty"><div className="empty-icon"></div><div className="empty-text">No announcements yet</div></div></div></div>}
       {pinned.map(a => (
         <div key={a.id} className="announcement-card pinned">
           <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'1rem'}}>
             <div style={{flex:1}}>
               <div style={{display:'flex',alignItems:'center',gap:'.5rem',marginBottom:'.3rem'}}>
-                <span style={{fontSize:'10px',fontWeight:700,color:'#7d5a00',background:'#fffbf0',border:'1px solid #f0d070',borderRadius:4,padding:'1px 6px',letterSpacing:'.06em',textTransform:'uppercase'}}>📌 Pinned</span>
+                <span style={{fontSize:'10px',fontWeight:700,color:'#7d5a00',background:'#fffbf0',border:'1px solid #f0d070',borderRadius:4,padding:'1px 6px',letterSpacing:'.06em',textTransform:'uppercase'}}> Pinned</span>
               </div>
               <div className="announcement-title">{a.title}</div>
               <div className="announcement-body">{a.body}</div>
@@ -3642,12 +2945,8 @@ function LeaveRequests({ profile }) {
   useEffect(() => {
     const q = isHR
       ? db.collection('leave_requests').orderBy('createdAt','desc')
-      : db.collection('leave_requests').where('userId','==',profile.id);
-    return q.onSnapshot(s => {
-      let docs = s.docs.map(d=>({id:d.id,...d.data()}));
-      if (!isHR) docs.sort((a,b)=>(b.createdAt?.toDate?.()?.getTime()||0)-(a.createdAt?.toDate?.()?.getTime()||0));
-      setRequests(docs);
-    });
+      : db.collection('leave_requests').where('userId','==',profile.id).orderBy('createdAt','desc');
+    return q.onSnapshot(s => setRequests(s.docs.map(d=>({id:d.id,...d.data()}))));
   }, []);
 
   const submit = async () => {
@@ -3679,7 +2978,7 @@ function LeaveRequests({ profile }) {
         <div className="panel-header">
           <div><div className="panel-title">{isHR ? 'All Leave Requests' : 'My Leave Requests'}</div></div>
         </div>
-        <div className="table-scroll">
+        <div className="table-wrap">
           <table>
             <thead><tr>{isHR&&<th>Staff Member</th>}<th>Type</th><th>Start</th><th>End</th><th>Reason</th><th>Status</th>{isHR&&<th>Actions</th>}</tr></thead>
             <tbody>
@@ -3750,7 +3049,7 @@ function Documents({ profile }) {
   const [saving, setSaving] = useState(false);
   const isHR = profile.rankTier >= 5;
   const categories = { policy:'Policy', handbook:'Handbook', form:'Form', guide:'Guide', other:'Other' };
-  const catEmoji = { policy:'📋', handbook:'📖', form:'📄', guide:'🗺️', other:'📁' };
+  const catEmoji = { policy:'', handbook:'', form:'', guide:'️', other:'' };
 
   useEffect(() => {
     return db.collection('documents').orderBy('createdAt','desc').onSnapshot(s =>
@@ -3787,13 +3086,13 @@ function Documents({ profile }) {
           <button className="btn btn-primary" onClick={()=>setModal(true)}><Icon name="upload" size={13}/> Add Document</button>
         </div>
       )}
-      {docs.length===0 && <div className="panel"><div className="panel-body"><div className="empty"><div className="empty-icon">📁</div><div className="empty-text">No documents yet</div><div className="empty-sub">HR can add handbooks, policies and forms here</div></div></div></div>}
+      {docs.length===0 && <div className="panel"><div className="panel-body"><div className="empty"><div className="empty-icon"></div><div className="empty-text">No documents yet</div><div className="empty-sub">HR can add handbooks, policies and forms here</div></div></div></div>}
       {Object.entries(grouped).map(([cat, items]) => (
         <div key={cat} style={{marginBottom:'1.5rem'}}>
           <div className="section-label" style={{marginBottom:'.75rem'}}>{catEmoji[cat]} {categories[cat]}</div>
           {items.map(d => (
             <div key={d.id} className="doc-card">
-              <div className="doc-icon">{catEmoji[d.category]||'📄'}</div>
+              <div className="doc-icon">{catEmoji[d.category]||''}</div>
               <div style={{flex:1}}>
                 <div className="doc-name">{d.name}</div>
                 <div className="doc-meta">{d.description && `${d.description} · `}Added by {d.uploadedBy} · {fmtDate(d.createdAt)}</div>
@@ -3847,7 +3146,7 @@ function Commendations({ profile }) {
   }, []);
 
   useEffect(() => {
-    db.collection('users').onSnapshot(s=>{const all=s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active');setUsers(all);});
+    db.collection('users').where('status','==','active').get().then(s=>setUsers(s.docs.map(d=>({id:d.id,...d.data()}))));
   }, []);
 
   const save = async () => {
@@ -4002,7 +3301,7 @@ function Analytics({ profile }) {
         <div className="panel">
           <div className="panel-header"><div className="panel-title">Disciplinary by type</div></div>
           <div className="panel-body">
-            {discByType.length===0 ? <div className="empty"><span className="empty-icon">✅</span><div className="empty-text">No disciplinary records</div><div className="empty-sub">Clean slate!</div></div> :
+            {discByType.length===0 ? <div className="empty"><div className="empty-text">No disciplinary records</div></div> :
               <div className="chart-bar-wrap">
                 {discByType.map(d=>(
                   <div key={d.name} className="chart-bar-row">
@@ -4134,21 +3433,104 @@ function EmployeeOfMonth({ profile }) {
   );
 }
 
-// ── Employment Records (AES-256 encrypted, HR only) ──
-// Sensitive fields encrypted client-side before Firestore write
+
+// ── Staff Roster ──
+function StaffRoster({ profile }) {
+  const [users, setUsers] = useState([]);
+  const [ranks, setRanks] = useState([]);
+  const [departments, setDepartments] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [search, setSearch] = useState('');
+  const [filterDept, setFilterDept] = useState('all');
+  const [view, setView] = useState('rank');
+
+  useEffect(() => {
+    const unsubUsers = db.collection('users').onSnapshot(s => {
+      setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active'));
+    });
+    const unsubRanks = db.collection('ranks').onSnapshot(s => {
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      docs.sort((a,b)=>(a.sortOrder??a.tier??0)-(b.sortOrder??b.tier??0));
+      setRanks(docs);
+    });
+    db.collection('departments').orderBy('name').get().then(s=>setDepartments(s.docs.map(d=>({id:d.id,...d.data()}))));
+    db.collection('courses').get().then(s=>setCourses(s.docs.map(d=>({id:d.id,...d.data()}))));
+    return ()=>{ unsubUsers(); unsubRanks(); };
+  }, []);
+
+  const teacherCourseMap = {};
+  courses.forEach(c=>(c.teacherIds||[]).forEach(tid=>{if(!teacherCourseMap[tid])teacherCourseMap[tid]=[];teacherCourseMap[tid].push(c);}));
+
+  const filtered = users.filter(u=>
+    (!search||u.displayName?.toLowerCase().includes(search.toLowerCase())||u.robloxUsername?.toLowerCase().includes(search.toLowerCase())) &&
+    (filterDept==='all'||u.departmentId===filterDept)
+  );
+
+  const groups = [
+    ...ranks.map(r=>({...r, members:filtered.filter(u=>u.rankId===r.id)})),
+    {id:'unranked',name:'Unranked',color:'#ccc',members:filtered.filter(u=>!u.rankId||!ranks.find(r=>r.id===u.rankId))}
+  ].filter(g=>g.members.length>0);
+
+  return (
+    <div>
+      <div className="panel" style={{marginBottom:'1rem'}}>
+        <div className="panel-body" style={{display:'flex',gap:'.75rem',flexWrap:'wrap',alignItems:'center'}}>
+          <input className="search-input" placeholder="Search staff..." value={search} onChange={e=>setSearch(e.target.value)} style={{flex:1,minWidth:180}}/>
+          <select className="form-input form-select" style={{width:'auto',minWidth:160}} value={filterDept} onChange={e=>setFilterDept(e.target.value)}>
+            <option value="all">All departments</option>
+            {departments.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+          <div style={{display:'flex',gap:'.25rem'}}>
+            <button onClick={()=>setView('rank')} className={`btn btn-sm ${view==='rank'?'btn-primary':'btn-ghost'}`}>By rank</button>
+            <button onClick={()=>setView('dept')} className={`btn btn-sm ${view==='dept'?'btn-primary':'btn-ghost'}`}>By dept</button>
+          </div>
+        </div>
+      </div>
+      {groups.length===0 ? (
+        <div className="panel"><div className="empty"><div className="empty-text">No staff found</div></div></div>
+      ) : groups.map(group=>(
+        <div key={group.id} className="panel" style={{marginBottom:'1rem'}}>
+          <div className="panel-header">
+            <div style={{display:'flex',alignItems:'center',gap:'.6rem'}}>
+              <span style={{width:10,height:10,borderRadius:'50%',background:group.color||'#ccc',display:'inline-block'}}/>
+              <span className="panel-title" style={{fontSize:'14px'}}>{group.name}</span>
+            </div>
+            <span className="badge badge-navy">{group.members.length} member{group.members.length!==1?'s':''}</span>
+          </div>
+          <div className="table-scroll">
+            <table>
+              <thead><tr><th>Name</th><th>Roblox</th><th>Department</th><th>Courses</th><th>Joined</th></tr></thead>
+              <tbody>
+                {group.members.map(u=>(
+                  <tr key={u.id}>
+                    <td style={{fontWeight:500}}>{u.rpName||u.displayName}</td>
+                    <td style={{color:'var(--text3)',fontSize:'12px'}}>{u.robloxUsername||'—'}</td>
+                    <td style={{fontSize:'12px'}}>{u.departmentName||'—'}</td>
+                    <td>{(teacherCourseMap[u.id]||[]).map(c=><span key={c.id} className="badge badge-teal" style={{marginRight:2,fontSize:'10px'}}>{c.name}</span>)}</td>
+                    <td style={{fontSize:'12px',color:'var(--text3)'}}>{fmtDate(u.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Employment Records ──
 function EmploymentRecords({ profile }) {
   const [records, setRecords] = useState([]);
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
-  const [tab, setTab] = useState('terminations'); // terminations | blacklist | all
-  const [form, setForm] = useState({ userId:'', type:'termination', reason:'', notes:'', incidentDetails:'', internalNotes:'', blacklisted:false, blacklistReason:'' });
+  const [tab, setTab] = useState('terminations');
+  const [form, setForm] = useState({userId:'',type:'termination',reason:'',notes:'',incidentDetails:'',internalNotes:'',blacklisted:false,blacklistReason:''});
   const [saving, setSaving] = useState(false);
   const isDirector = profile.rankTier >= 6;
 
   useEffect(() => {
-    const unsub = db.collection('employment_records').orderBy('createdAt','desc').onSnapshot(s => {
-      setRecords(s.docs.map(d=>({id:d.id,...d.data()})));
-    });
+    const unsub = db.collection('employment_records').orderBy('createdAt','desc').onSnapshot(s=>setRecords(s.docs.map(d=>({id:d.id,...d.data()}))));
     db.collection('users').onSnapshot(s=>setUsers(s.docs.map(d=>({id:d.id,...d.data()}))));
     return unsub;
   }, []);
@@ -4157,139 +3539,61 @@ function EmploymentRecords({ profile }) {
     if (!form.userId) return;
     setSaving(true);
     const user = users.find(u=>u.id===form.userId);
-
     const record = {
-      userId: form.userId,
-      userName: user?.displayName||'—',
-      userEmail: user?.email||'—',
-      userRank: user?.rankName||'—',
-      type: form.type,
-      blacklisted: form.blacklisted,
-      blacklistReason: form.blacklistReason||'',
-      reason: form.reason,
-      notes: form.notes,
-      incidentDetails: form.incidentDetails,
-      internalNotes: form.internalNotes,
-      createdBy: profile.displayName,
-      createdById: profile.id,
+      userId:form.userId, userName:user?.displayName||'—', userEmail:user?.email||'—', userRank:user?.rankName||'—',
+      type:form.type, blacklisted:form.blacklisted, blacklistReason:form.blacklistReason||'',
+      reason:form.reason, notes:form.notes, incidentDetails:form.incidentDetails, internalNotes:form.internalNotes,
+      createdBy:profile.displayName, createdById:profile.id,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
     };
-
     await db.collection('employment_records').add(record);
-
-    // If terminated — update user status and remove from active roster
-    if (form.type === 'termination') {
-      await db.collection('users').doc(form.userId).update({
-        status: 'terminated',
-        terminatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        terminatedBy: profile.displayName,
-      });
+    if (form.type==='termination') {
+      await db.collection('users').doc(form.userId).update({status:'terminated', terminatedAt:firebase.firestore.FieldValue.serverTimestamp(), terminatedBy:profile.displayName});
     }
-
-    await addLog(profile.id, profile.displayName,
-      `Created ${form.type} record${form.blacklisted?' + blacklisted':''}`,
-      user?.displayName
-    );
-
-    setModal(false);
-    setForm({userId:'',type:'termination',reason:'',notes:'',incidentDetails:'',internalNotes:'',blacklisted:false,blacklistReason:''});
-    setSaving(false);
+    await addLog(profile.id, profile.displayName, `Created ${form.type} record${form.blacklisted?' + blacklisted':''}`, user?.displayName);
+    setModal(false); setForm({userId:'',type:'termination',reason:'',notes:'',incidentDetails:'',internalNotes:'',blacklisted:false,blacklistReason:''}); setSaving(false);
   };
 
-  const removeFromBlacklist = async (id, userName) => {
-    if (!confirm(`Remove ${userName} from blacklist?`)) return;
-    await db.collection('employment_records').doc(id).update({ blacklisted: false });
-    await addLog(profile.id, profile.displayName, 'Removed from blacklist', userName);
-  };
-
-  const deleteRecord = async (id, userName) => {
-    if (!confirm(`Permanently delete this record for ${userName}? This cannot be undone.`)) return;
-    await db.collection('employment_records').doc(id).delete();
-    await addLog(profile.id, profile.displayName, 'Deleted employment record', userName);
-  };
-
-  const filtered = records.filter(r => {
-    if (tab === 'terminations') return r.type === 'termination';
-    if (tab === 'blacklist') return r.blacklisted;
+  const filtered = records.filter(r=>{
+    if(tab==='terminations') return r.type==='termination';
+    if(tab==='blacklist') return r.blacklisted;
     return true;
   });
 
-  const typeColor = {
-    termination: 'badge-red',
-    resignation: 'badge-amber',
-    suspension: 'badge-amber',
-    investigation: 'badge-navy',
-  };
-
-  const RecordCard = ({ r }) => {
-    const d = r;
-    return (
-      <div style={{background:'var(--white)',border:'1px solid var(--border)',borderLeft:r.blacklisted?'3px solid #c0392b':'1px solid var(--border)',borderRadius:'var(--radius)',padding:'1.25rem 1.5rem',marginBottom:'.85rem',boxShadow:'var(--shadow-sm)'}}>
-        <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'1rem',flexWrap:'wrap'}}>
-          <div style={{flex:1}}>
-            <div style={{display:'flex',alignItems:'center',gap:'.6rem',marginBottom:'.4rem',flexWrap:'wrap'}}>
-              <div className="avatar" style={{width:28,height:28,fontSize:11,flexShrink:0}}>{(r.userName||'?')[0].toUpperCase()}</div>
-              <span style={{fontWeight:700,fontSize:'15px',color:'var(--navy)',fontFamily:"'Playfair Display',serif"}}>{r.userName}</span>
-              <span className={`badge ${typeColor[r.type]||'badge-silver'}`} style={{textTransform:'capitalize'}}>{r.type}</span>
-              {r.blacklisted && <span className="badge badge-red">🚫 Blacklisted</span>}
-              <span style={{fontSize:'11px',color:'var(--text3)',marginLeft:'auto'}}>{fmtDate(r.createdAt)}</span>
-            </div>
-            <div style={{fontSize:'12px',color:'var(--text3)',marginBottom:'.75rem'}}>{r.userRank} · {r.userEmail} · Added by {r.createdBy}</div>
-
-            {/* Decrypted fields */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'.6rem 1.5rem'}}>
-                {[['Reason',d.reason],['Notes',d.notes],['Incident details',d.incidentDetails],['Internal notes',d.internalNotes]].map(([label,val])=> val && val !== '' ? (
-                  <div key={label}>
-                    <div style={{fontSize:'10.5px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:'2px'}}>{label}</div>
-                    <div style={{fontSize:'13px',color:'var(--text)',lineHeight:1.5}}>{val}</div>
-                  </div>
-                ) : null)}
-            </div>
-          </div>
-          {isDirector && (
-            <div style={{display:'flex',gap:'.35rem',flexShrink:0}}>
-              {r.blacklisted && <button className="btn btn-ghost btn-sm" onClick={()=>removeFromBlacklist(r.id,r.userName)}>Remove from BL</button>}
-              <button className="btn btn-danger btn-sm" onClick={()=>deleteRecord(r.id,r.userName)}><Icon name="trash" size={12}/></button>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div>
-
-
-      {/* Toolbar */}
       <div style={{display:'flex',alignItems:'center',gap:'.75rem',marginBottom:'1.25rem',flexWrap:'wrap'}}>
-        <div style={{display:'flex',background:'var(--bg2)',borderRadius:8,padding:3,gap:2}}>
+        <div className="filter-tabs">
           {[['terminations','Terminations'],['blacklist','Blacklist'],['all','All Records']].map(([id,label])=>(
-            <button key={id} onClick={()=>setTab(id)} style={{padding:'.35rem .85rem',fontSize:'12px',fontWeight:500,border:'none',background:tab===id?'var(--white)':'transparent',borderRadius:6,cursor:'pointer',color:tab===id?'var(--navy)':'var(--text3)',fontFamily:'inherit',transition:'all .15s',boxShadow:tab===id?'var(--shadow-sm)':'none'}}>
-              {label}
-              <span style={{marginLeft:'.4rem',opacity:.6,fontSize:'11px'}}>({id==='terminations'?records.filter(r=>r.type==='termination').length:id==='blacklist'?records.filter(r=>r.blacklisted).length:records.length})</span>
+            <button key={id} onClick={()=>setTab(id)} className={`filter-tab${tab===id?' active':''}`}>
+              {label} <span style={{opacity:.6,fontSize:'11px'}}>({id==='terminations'?records.filter(r=>r.type==='termination').length:id==='blacklist'?records.filter(r=>r.blacklisted).length:records.length})</span>
             </button>
           ))}
         </div>
-        <button className="btn btn-primary btn-sm" style={{marginLeft:'auto'}} onClick={()=>setModal(true)}>
-          <Icon name="plus" size={13}/> New Record
-        </button>
+        <button className="btn btn-danger btn-sm" style={{marginLeft:'auto'}} onClick={()=>setModal(true)}><Icon name="plus" size={13}/> New Record</button>
       </div>
 
-      {/* Records */}
-      {filtered.length === 0
-        ? <div className="panel"><div className="panel-body"><div className="empty"><div className="empty-icon">📋</div><div className="empty-text">No {tab} records</div></div></div></div>
-        : filtered.map(r => <RecordCard key={r.id} r={r}/>)
-      }
+      {filtered.length===0 ? (
+        <div className="panel"><div className="empty"><span className="empty-icon">📋</span><div className="empty-text">No {tab} records</div></div></div>
+      ) : filtered.map(r=>(
+        <div key={r.id} style={{background:'var(--white)',border:'1px solid var(--border)',borderLeft:r.blacklisted?'3px solid #c0392b':'1px solid var(--border)',borderRadius:'var(--radius)',padding:'1.25rem 1.5rem',marginBottom:'.85rem',boxShadow:'var(--shadow-sm)'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'.6rem',marginBottom:'.5rem',flexWrap:'wrap'}}>
+            <div className="avatar" style={{width:28,height:28,fontSize:11,flexShrink:0}}>{(r.userName||'?')[0].toUpperCase()}</div>
+            <span style={{fontWeight:700,fontSize:'15px',color:'var(--navy)',fontFamily:"'Playfair Display',serif"}}>{r.userName}</span>
+            <span className={`badge ${r.type==='termination'?'badge-red':'badge-amber'}`} style={{textTransform:'capitalize'}}>{r.type}</span>
+            {r.blacklisted && <span className="badge badge-red">🚫 Blacklisted</span>}
+            <span style={{fontSize:'11px',color:'var(--text3)',marginLeft:'auto'}}>{fmtDate(r.createdAt)} · {r.createdBy}</span>
+          </div>
+          {r.reason && <div style={{fontSize:'13px',color:'var(--text)',marginTop:'.35rem'}}><strong>Reason:</strong> {r.reason}</div>}
+          {r.incidentDetails && <div style={{fontSize:'12.5px',color:'var(--text2)',marginTop:'.25rem'}}>{r.incidentDetails}</div>}
+        </div>
+      ))}
 
-      {/* New record modal */}
       {modal && (
         <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
-          <div className="modal" style={{maxWidth:560}}>
+          <div className="modal" style={{maxWidth:520}}>
             <div className="modal-header">
-              <div>
-                <span className="modal-title">New Employment Record</span>
-              </div>
+              <span className="modal-title">New Employment Record</span>
               <button className="modal-close" onClick={()=>setModal(false)}><Icon name="x" size={14}/></button>
             </div>
             <div className="modal-body">
@@ -4309,38 +3613,27 @@ function EmploymentRecords({ profile }) {
                   <option value="investigation">Under Investigation</option>
                 </select>
               </div>
-              {form.type === 'termination' && (
-                <div className="alert alert-warn" style={{fontSize:'12px'}}>⚠️ This will immediately change the staff member's status to "terminated" and remove them from the active roster.</div>
-              )}
+              {form.type==='termination' && <div className="alert alert-warn" style={{fontSize:'12px'}}>⚠️ This will immediately set the staff member status to "terminated".</div>}
               <div className="form-group">
                 <label className="form-label">Reason</label>
                 <input className="form-input" value={form.reason} onChange={e=>setForm(f=>({...f,reason:e.target.value}))} placeholder="Primary reason"/>
               </div>
               <div className="form-group">
                 <label className="form-label">Incident details</label>
-                <textarea className="form-input" rows={3} value={form.incidentDetails} onChange={e=>setForm(f=>({...f,incidentDetails:e.target.value}))} placeholder="Detailed description of what happened..."/>
-              </div>
-              <div className="form-group">
-                <label className="form-label">Internal notes</label>
-                <textarea className="form-input" rows={2} value={form.internalNotes} onChange={e=>setForm(f=>({...f,internalNotes:e.target.value}))} placeholder="HR-only notes..."/>
+                <textarea className="form-input" rows={3} value={form.incidentDetails} onChange={e=>setForm(f=>({...f,incidentDetails:e.target.value}))} placeholder="Detailed description..."/>
               </div>
               <div className="form-group" style={{padding:'1rem',background:'#fff5f5',borderRadius:8,border:'1px solid #fad4d4'}}>
                 <label style={{display:'flex',alignItems:'center',gap:'.6rem',cursor:'pointer',marginBottom:'.5rem'}}>
                   <input type="checkbox" checked={form.blacklisted} onChange={e=>setForm(f=>({...f,blacklisted:e.target.checked}))}/>
                   <span style={{fontWeight:600,fontSize:'13px',color:'#c0392b'}}>🚫 Add to Employment Blacklist</span>
                 </label>
-                {form.blacklisted && (
-                  <div>
-                    <label className="form-label">Blacklist reason</label>
-                    <input className="form-input" value={form.blacklistReason} onChange={e=>setForm(f=>({...f,blacklistReason:e.target.value}))} placeholder="Why should this person not be re-hired?"/>
-                  </div>
-                )}
+                {form.blacklisted && <input className="form-input" value={form.blacklistReason} onChange={e=>setForm(f=>({...f,blacklistReason:e.target.value}))} placeholder="Blacklist reason"/>}
               </div>
             </div>
             <div className="modal-footer">
               <button className="btn btn-ghost" onClick={()=>setModal(false)}>Cancel</button>
               <button className="btn btn-danger" onClick={save} disabled={saving||!form.userId}>
-                {saving ? <div className="spinner spinner-dark"/> : `Create ${form.type} record`}
+                {saving?<div className="spinner spinner-dark"/>:`Create ${form.type} record`}
               </button>
             </div>
           </div>
@@ -4352,321 +3645,66 @@ function EmploymentRecords({ profile }) {
 
 // ── Job Descriptions ──
 const JOB_DESCRIPTIONS = [
-  {
-    title: 'Building Principal',
-    tier: 1,
-    color: '#0B1F4A',
-    icon: '🏫',
-    summary: 'Chief executive of the school responsible for all day-to-day operations.',
-    responsibilities: [
-      'Oversee the overall administration and daily operations of the school building.',
-      'Set and communicate the vision, mission, and academic goals of the school.',
-      'Supervise, evaluate, and support all faculty and administrative staff.',
-      'Serve as the primary liaison between the school, district leadership, and the community.',
-      'Ensure a safe, inclusive, and productive learning environment for all students and staff.',
-      'Approve all major decisions relating to staffing, curriculum, discipline, and facilities.',
-      'Review and approve school-wide policies and ensure compliance with district regulations.',
-    ],
-    reports_to: 'District Superintendent',
-    supervises: 'All school staff',
-  },
-  {
-    title: 'Assistant Principal of Operations',
-    tier: 2,
-    color: '#1a3470',
-    icon: '⚙️',
-    summary: 'Manages the logistical and operational backbone of the school to ensure smooth day-to-day function.',
-    responsibilities: [
-      'Oversee all school operations including facilities management, scheduling, and campus logistics.',
-      'Ensure the school is appropriately staffed at all times and coordinate coverage for absences.',
-      'Manage operational budgets and coordinate procurement of supplies and resources.',
-      'Work closely with the Safety Administrator to schedule drills and maintain campus security.',
-      'Coordinate with maintenance and custodial teams to keep facilities safe and functional.',
-      'Develop and enforce school-wide operational policies and procedures.',
-      'Serve as acting principal in the absence of the Building Principal.',
-    ],
-    reports_to: 'Building Principal',
-    supervises: 'Operations Administrator, School Resource Officers, Office Secretary',
-  },
-  {
-    title: 'Assistant Principal of Student Services',
-    tier: 2,
-    color: '#1a3470',
-    icon: '🎓',
-    summary: 'Leads all student-facing support services, ensuring the academic and personal wellbeing of every student.',
-    responsibilities: [
-      'Oversee the Guidance Counseling department and all student support service programs.',
-      'Coordinate student enrollment, scheduling, and academic advising processes.',
-      'Manage student intervention and support plans in collaboration with counselors.',
-      'Serve as a key advocate for student welfare, mental health resources, and equitable access.',
-      'Monitor attendance trends and coordinate appropriate interventions.',
-      'Build partnerships with families and external agencies to support student needs.',
-      'Supervise the Student Services Administrator and Guidance Counselors.',
-    ],
-    reports_to: 'Building Principal',
-    supervises: 'Student Services Administrator, Guidance Counselors',
-  },
-  {
-    title: 'Assistant Principal of Instruction',
-    tier: 2,
-    color: '#1a3470',
-    icon: '📚',
-    summary: 'Drives academic excellence by overseeing curriculum, instructional quality, and teacher development.',
-    responsibilities: [
-      'Lead all curriculum development, instructional planning, and academic program management.',
-      'Conduct regular classroom observations and provide feedback to improve instructional quality.',
-      'Review and approve lesson plans submitted by Core and Elective Instructors.',
-      'Design and facilitate professional development opportunities for all teaching staff.',
-      'Analyze academic performance data and implement improvement strategies.',
-      'Ensure alignment of instructional practices with district and state academic standards.',
-      'Supervise the Instruction Administrator and all instructional staff.',
-    ],
-    reports_to: 'Building Principal',
-    supervises: 'Instruction Administrator, Core Instructors, Elective Instructors',
-  },
-  {
-    title: 'Human Resources Director',
-    tier: 3,
-    color: '#1D9E75',
-    icon: '👥',
-    summary: 'Leads all human resources functions, managing the full lifecycle of staff employment and organizational culture.',
-    responsibilities: [
-      'Oversee all HR functions including recruitment, onboarding, and staff retention.',
-      'Manage employee relations, conflict resolution, and disciplinary processes.',
-      'Maintain accurate and confidential employment records for all staff members.',
-      'Administer leave requests, attendance tracking, and staff performance reviews.',
-      'Ensure compliance with employment law, district HR policies, and ethical standards.',
-      'Issue and manage promotions, commendations, and disciplinary actions.',
-      'Advise school leadership on staffing decisions and organizational structure.',
-      'Maintain the staff roster and oversee the employment blacklist and termination records.',
-    ],
-    reports_to: 'Building Principal',
-    supervises: 'All HR staff',
-  },
-  {
-    title: 'Dean of Students',
-    tier: 4,
-    color: '#2c5f9e',
-    icon: '⚖️',
-    summary: 'Maintains the social order and behavioral standards of the school through consistent and fair discipline.',
-    responsibilities: [
-      'Enforce the school\'s code of conduct and student disciplinary policies.',
-      'Investigate behavioral incidents and determine appropriate consequences.',
-      'Issue verbal warnings, written warnings, suspensions, and referrals as appropriate.',
-      'Maintain detailed and accurate disciplinary records for all students and staff.',
-      'Collaborate with the Building Principal on serious disciplinary matters.',
-      'Develop and implement school-wide behavioral programs and restorative practices.',
-      'Supervise the Assistant Dean of Students and coordinate disciplinary coverage.',
-    ],
-    reports_to: 'Building Principal',
-    supervises: 'Assistant Dean of Students',
-  },
-  {
-    title: 'Assistant Dean of Students',
-    tier: 5,
-    color: '#3a7fc1',
-    icon: '📋',
-    summary: 'Supports the Dean of Students in maintaining school discipline and a positive campus culture.',
-    responsibilities: [
-      'Assist the Dean of Students in all disciplinary investigations and proceedings.',
-      'Handle lower-level behavioral incidents independently, escalating as appropriate.',
-      'Help monitor hallways, common areas, and campus environments during transitions.',
-      'Maintain accurate records of disciplinary actions taken.',
-      'Support the implementation of school-wide behavioral programs.',
-      'Act as Dean of Students in their absence.',
-      'Build positive relationships with students to encourage appropriate behavior.',
-    ],
-    reports_to: 'Dean of Students',
-    supervises: 'N/A',
-  },
-  {
-    title: 'Administration',
-    tier: 5,
-    color: '#5b6abf',
-    icon: '🗂️',
-    summary: 'Administrative staff are each assigned to an assistant principal\'s department to support the smooth operation of their area.',
-    responsibilities: [
-      'Principal\'s Assistant — Supports the Building Principal directly with scheduling, communications, and monitoring staff activity across the school.',
-      'Operations Administrator — Assists the AP of Operations in managing school logistics, ensuring appropriate staffing levels, and maintaining operational workflows.',
-      'Instruction Administrator — Assists the AP of Instruction by observing classrooms, reviewing lesson plans, and supporting teacher evaluations.',
-      'Student Services Administrator — Assists the AP of Student Services in managing student records, monitoring the Guidance team, and coordinating student support.',
-      'Safety Administrator — Works alongside the AP of Operations to schedule emergency drills, manage campus safety protocols, and oversee the School Resource Officers.',
-    ],
-    reports_to: 'Assigned Assistant Principal',
-    supervises: 'Varies by assignment',
-    note: 'Each Administrator is permanently assigned to one department. Their focus, responsibilities, and chain of reporting follow that department.',
-  },
-  {
-    title: 'Guidance Counselor',
-    tier: 6,
-    color: '#7b8cde',
-    icon: '💬',
-    summary: 'Provides academic, social-emotional, and career guidance to support the holistic development of every student.',
-    responsibilities: [
-      'Meet regularly with assigned students to discuss academic progress, goals, and challenges.',
-      'Develop and monitor individual academic plans and course schedules for students.',
-      'Provide social-emotional support and connect students with appropriate resources.',
-      'Facilitate small group sessions on topics such as study skills, stress management, and career exploration.',
-      'Communicate proactively with families regarding student progress, attendance, and wellbeing.',
-      'Collaborate with the AP of Student Services on intervention strategies for at-risk students.',
-      'Maintain confidential and accurate counseling records.',
-    ],
-    reports_to: 'Assistant Principal of Student Services',
-    supervises: 'N/A',
-  },
-  {
-    title: 'School Resource Officer',
-    tier: 6,
-    color: '#2980b9',
-    icon: '🛡️',
-    summary: 'Ensures the physical safety and security of students, staff, and the school campus at all times.',
-    responsibilities: [
-      'Maintain a visible and positive presence on campus to deter unsafe behavior.',
-      'Respond promptly to security incidents, emergencies, and requests for assistance.',
-      'Enforce school policies and applicable regulations related to campus safety.',
-      'Assist in the planning and execution of emergency drills alongside the Safety Administrator.',
-      'Build positive relationships with students and staff to foster a culture of safety and trust.',
-      'Monitor campus entry and exit points and manage visitor protocols.',
-      'Prepare detailed incident reports for any security-related events.',
-      'Coordinate with local law enforcement when necessary.',
-    ],
-    reports_to: 'Safety Administrator / AP of Operations',
-    supervises: 'N/A',
-  },
-  {
-    title: 'Core Instructor',
-    tier: 7,
-    color: '#27ae60',
-    icon: '✏️',
-    summary: 'Delivers rigorous, standards-aligned instruction in core academic subjects to prepare students for academic success.',
-    responsibilities: [
-      'Plan and deliver high-quality, engaging lessons aligned to curriculum standards in a core subject area (e.g. Math, English, Science, Social Studies).',
-      'Develop lesson plans and submit them to the Instruction Administrator for review.',
-      'Assess student learning through formative and summative assessments and adjust instruction accordingly.',
-      'Maintain accurate grade books and provide timely, constructive feedback to students.',
-      'Create a positive, inclusive classroom environment where all students can thrive.',
-      'Participate in professional development, faculty meetings, and curriculum planning sessions.',
-      'Communicate regularly with families and guidance staff regarding student progress.',
-      'Collaborate with fellow instructors to align instruction and share best practices.',
-    ],
-    reports_to: 'Assistant Principal of Instruction',
-    supervises: 'N/A',
-  },
-  {
-    title: 'Elective Instructor',
-    tier: 7,
-    color: '#8e44ad',
-    icon: '🎨',
-    summary: 'Provides enriching elective courses that expand student interests, talents, and real-world skills beyond the core curriculum.',
-    responsibilities: [
-      'Plan and deliver engaging lessons in an assigned elective subject (e.g. Art, Music, Physical Education, Computer Science, Drama).',
-      'Develop lesson plans and submit them to the Instruction Administrator for review.',
-      'Cultivate an environment that encourages creativity, exploration, and personal growth.',
-      'Assess student participation and achievement in the context of the elective subject.',
-      'Maintain accurate records of student progress and attendance.',
-      'Coordinate with the AP of Instruction to align elective offerings with school-wide academic goals.',
-      'Contribute to school events, performances, and extracurricular activities as appropriate.',
-      'Support cross-curricular connections to reinforce core academic skills within the elective context.',
-    ],
-    reports_to: 'Assistant Principal of Instruction',
-    supervises: 'N/A',
-  },
+  { title:'Building Principal', tier:1, color:'#0B1F4A', icon:'🏫', summary:'Chief executive responsible for all day-to-day school operations.', reports_to:'District Superintendent', supervises:'All school staff', responsibilities:['Oversee the overall administration and daily operations of the school.','Set and communicate the vision, mission, and academic goals.','Supervise, evaluate, and support all faculty and administrative staff.','Serve as primary liaison between school, district, and community.','Ensure a safe, inclusive, and productive learning environment.','Approve all major decisions relating to staffing, curriculum, and discipline.'] },
+  { title:'Assistant Principal of Operations', tier:2, color:'#1a3470', icon:'⚙️', summary:'Manages the logistical and operational backbone of the school.', reports_to:'Building Principal', supervises:'Operations Administrator, SROs, Office Secretary', responsibilities:['Oversee all school operations including facilities and scheduling.','Ensure the school is appropriately staffed at all times.','Work with the Safety Administrator to schedule drills and maintain security.','Coordinate with maintenance teams to keep facilities safe.','Serve as acting principal in the absence of the Building Principal.'] },
+  { title:'Assistant Principal of Student Services', tier:2, color:'#1a3470', icon:'🎓', summary:'Leads all student-facing support services and counseling.', reports_to:'Building Principal', supervises:'Student Services Administrator, Guidance Counselors', responsibilities:['Oversee the Guidance Counseling department.','Coordinate student enrollment, scheduling, and academic advising.','Monitor attendance trends and coordinate appropriate interventions.','Build partnerships with families to support student needs.','Supervise the Student Services Administrator and Guidance Counselors.'] },
+  { title:'Assistant Principal of Instruction', tier:2, color:'#1a3470', icon:'📚', summary:'Drives academic excellence by overseeing curriculum and instructional quality.', reports_to:'Building Principal', supervises:'Instruction Administrator, Core Instructors, Elective Instructors', responsibilities:['Lead all curriculum development and instructional planning.','Conduct regular classroom observations and provide feedback.','Review and approve lesson plans submitted by instructors.','Design and facilitate professional development for all teaching staff.','Ensure alignment with district and state academic standards.'] },
+  { title:'Human Resources Director', tier:3, color:'#1D9E75', icon:'👥', summary:'Leads all HR functions managing the full lifecycle of staff employment.', reports_to:'Building Principal', supervises:'All HR staff', responsibilities:['Oversee all HR functions including recruitment and onboarding.','Manage employee relations, conflict resolution, and disciplinary processes.','Maintain accurate and confidential employment records.','Administer leave requests, attendance tracking, and performance reviews.','Issue and manage promotions, commendations, and disciplinary actions.'] },
+  { title:'Dean of Students', tier:4, color:'#2c5f9e', icon:'⚖️', summary:'Maintains social order through consistent and fair discipline.', reports_to:'Building Principal', supervises:'Assistant Dean of Students', responsibilities:['Enforce the school code of conduct and disciplinary policies.','Investigate behavioral incidents and determine appropriate consequences.','Issue verbal warnings, written warnings, suspensions as appropriate.','Maintain detailed and accurate disciplinary records.','Supervise the Assistant Dean of Students.'] },
+  { title:'Assistant Dean of Students', tier:5, color:'#3a7fc1', icon:'📋', summary:'Supports the Dean in maintaining school discipline and positive campus culture.', reports_to:'Dean of Students', supervises:'N/A', responsibilities:['Assist the Dean in all disciplinary investigations.','Handle lower-level incidents independently.','Monitor hallways and common areas during transitions.','Act as Dean of Students in their absence.'] },
+  { title:'Administration', tier:5, color:'#5b6abf', icon:'🗂️', summary:'Administrative staff each assigned to an assistant principal department.', reports_to:'Assigned Assistant Principal', supervises:'Varies by assignment', note:'Each Administrator is permanently assigned to one department.', responsibilities:["Principal's Assistant — Supports the Building Principal directly with scheduling and monitoring staff.","Operations Administrator — Assists the AP of Operations with logistics and staffing.",'Instruction Administrator — Assists AP of Instruction with classroom observations and lesson plan reviews.','Student Services Administrator — Assists AP of Student Services with student records.','Safety Administrator — Works with AP of Operations on emergency drills and campus safety.'] },
+  { title:'Guidance Counselor', tier:6, color:'#7b8cde', icon:'💬', summary:'Provides academic, social-emotional, and career guidance to students.', reports_to:'Assistant Principal of Student Services', supervises:'N/A', responsibilities:['Meet regularly with students to discuss academic progress.','Develop and monitor individual academic plans.','Provide social-emotional support and connect students with resources.','Communicate with families regarding student progress and wellbeing.'] },
+  { title:'School Resource Officer', tier:6, color:'#2980b9', icon:'🛡️', summary:'Ensures the physical safety and security of students and staff.', reports_to:'Safety Administrator / AP of Operations', supervises:'N/A', responsibilities:['Maintain a visible and positive presence on campus.','Respond promptly to security incidents and emergencies.','Assist in the planning and execution of emergency drills.','Build positive relationships with students and staff.','Prepare detailed incident reports for any security-related events.'] },
+  { title:'Core Instructor', tier:7, color:'#27ae60', icon:'✏️', summary:'Delivers rigorous, standards-aligned instruction in core academic subjects.', reports_to:'Assistant Principal of Instruction', supervises:'N/A', responsibilities:['Plan and deliver high-quality lessons aligned to curriculum standards.','Develop and submit lesson plans for review.','Assess student learning and adjust instruction accordingly.','Maintain accurate grade books and provide constructive feedback.','Participate in professional development and faculty meetings.'] },
+  { title:'Elective Instructor', tier:7, color:'#8e44ad', icon:'🎨', summary:'Provides enriching elective courses expanding student interests and skills.', reports_to:'Assistant Principal of Instruction', supervises:'N/A', responsibilities:['Plan and deliver engaging lessons in an assigned elective subject.','Develop and submit lesson plans for review.','Cultivate an environment encouraging creativity and personal growth.','Assess student participation and achievement in the elective context.','Support cross-curricular connections to reinforce core academic skills.'] },
 ];
 
 function JobDescriptions() {
   const [selected, setSelected] = useState(null);
   const [search, setSearch] = useState('');
-
-  const filtered = JOB_DESCRIPTIONS.filter(j =>
-    j.title.toLowerCase().includes(search.toLowerCase()) ||
-    j.summary.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const job = selected ? JOB_DESCRIPTIONS.find(j => j.title === selected) : null;
-
+  const filtered = JOB_DESCRIPTIONS.filter(j=>j.title.toLowerCase().includes(search.toLowerCase())||j.summary.toLowerCase().includes(search.toLowerCase()));
+  const job = selected ? JOB_DESCRIPTIONS.find(j=>j.title===selected) : null;
   return (
     <div>
-      {/* Header banner */}
-      <div style={{background:`linear-gradient(135deg, #0B1F4A, #0a2a1e)`,borderRadius:'var(--radius)',padding:'1.5rem 2rem',marginBottom:'1.5rem',position:'relative',overflow:'hidden'}}>
-        <div style={{position:'absolute',inset:0,backgroundImage:'linear-gradient(rgba(255,255,255,.03) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.03) 1px, transparent 1px)',backgroundSize:'32px 32px',pointerEvents:'none'}}/>
+      <div style={{background:'linear-gradient(135deg,#0B1F4A,#0a2a1e)',borderRadius:'var(--radius)',padding:'1.5rem 2rem',marginBottom:'1.5rem',position:'relative',overflow:'hidden'}}>
         <div style={{position:'relative',zIndex:1}}>
           <div style={{fontFamily:"'Playfair Display',serif",fontSize:'22px',fontWeight:600,color:'white',marginBottom:'.35rem'}}>Staff Position Directory</div>
-          <div style={{fontSize:'13px',color:'rgba(255,255,255,.5)',marginBottom:'1rem'}}>Lamoille High School · Official role descriptions and responsibilities</div>
-          <input
-            className="form-input"
-            placeholder="Search positions..."
-            value={search}
-            onChange={e=>setSearch(e.target.value)}
-            style={{maxWidth:340,background:'rgba(255,255,255,.08)',border:'1px solid rgba(255,255,255,.15)',color:'white',fontSize:'13px'}}
-          />
+          <div style={{fontSize:'13px',color:'rgba(255,255,255,.5)',marginBottom:'1rem'}}>Lamoille High School · Official role descriptions</div>
+          <input className="form-input" placeholder="Search positions..." value={search} onChange={e=>setSearch(e.target.value)} style={{maxWidth:340,background:'rgba(255,255,255,.08)',border:'1px solid rgba(255,255,255,.15)',color:'white'}}/>
         </div>
       </div>
-
       <div style={{display:'grid',gridTemplateColumns:job?'300px 1fr':'1fr',gap:'1.25rem',alignItems:'start'}}>
-
-        {/* Role list */}
         <div style={{display:'flex',flexDirection:'column',gap:'.5rem'}}>
-          {filtered.map(j => (
-            <div
-              key={j.title}
-              onClick={()=>setSelected(j.title===selected?null:j.title)}
-              style={{
-                background: selected===j.title ? 'var(--navy)' : 'var(--white)',
-                border: `1px solid ${selected===j.title ? 'var(--navy)' : 'var(--border)'}`,
-                borderLeft: `3px solid ${j.color}`,
-                borderRadius: 'var(--radius)',
-                padding: '.85rem 1rem',
-                cursor: 'pointer',
-                transition: 'all .15s',
-                boxShadow: selected===j.title ? '0 4px 16px rgba(11,31,74,.2)' : 'var(--shadow-sm)',
-              }}
-              onMouseEnter={e=>{ if(selected!==j.title) e.currentTarget.style.background='var(--bg)'; }}
-              onMouseLeave={e=>{ if(selected!==j.title) e.currentTarget.style.background='var(--white)'; }}
-            >
+          {filtered.map(j=>(
+            <div key={j.title} onClick={()=>setSelected(j.title===selected?null:j.title)} style={{background:selected===j.title?'var(--navy)':'var(--white)',border:`1px solid ${selected===j.title?'var(--navy)':'var(--border)'}`,borderLeft:`3px solid ${j.color}`,borderRadius:'var(--radius)',padding:'.85rem 1rem',cursor:'pointer',transition:'all .15s',boxShadow:'var(--shadow-sm)'}}>
               <div style={{display:'flex',alignItems:'center',gap:'.6rem'}}>
                 <span style={{fontSize:'18px',flexShrink:0}}>{j.icon}</span>
                 <div>
-                  <div style={{fontWeight:600,fontSize:'13.5px',color:selected===j.title?'white':'var(--navy)',lineHeight:1.3}}>{j.title}</div>
-                  {!job && <div style={{fontSize:'11.5px',color:selected===j.title?'rgba(255,255,255,.6)':'var(--text3)',marginTop:'2px',lineHeight:1.4}}>{j.summary.slice(0,70)}…</div>}
+                  <div style={{fontWeight:600,fontSize:'13.5px',color:selected===j.title?'white':'var(--navy)'}}>{j.title}</div>
+                  {!job&&<div style={{fontSize:'11.5px',color:selected===j.title?'rgba(255,255,255,.6)':'var(--text3)',marginTop:'2px'}}>{j.summary.slice(0,70)}…</div>}
                 </div>
               </div>
             </div>
           ))}
-          {filtered.length === 0 && <div className="empty"><div className="empty-text">No positions match</div></div>}
         </div>
-
-        {/* Detail panel */}
-        {job && (
+        {job&&(
           <div className="panel fade-in" style={{position:'sticky',top:'1rem'}}>
-            <div style={{background:`linear-gradient(135deg, ${job.color}ee, ${job.color}aa)`,padding:'1.5rem 1.75rem',borderRadius:'var(--radius) var(--radius) 0 0'}}>
+            <div style={{background:`linear-gradient(135deg,${job.color}ee,${job.color}aa)`,padding:'1.5rem 1.75rem',borderRadius:'var(--radius) var(--radius) 0 0'}}>
               <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'1rem'}}>
-                <div>
-                  <div style={{fontSize:'28px',marginBottom:'.4rem'}}>{job.icon}</div>
-                  <div style={{fontFamily:"'Playfair Display',serif",fontSize:'20px',fontWeight:600,color:'white',lineHeight:1.2}}>{job.title}</div>
-                </div>
-                <button onClick={()=>setSelected(null)} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,width:28,height:28,cursor:'pointer',color:'white',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>✕</button>
+                <div><div style={{fontSize:'28px',marginBottom:'.4rem'}}>{job.icon}</div><div style={{fontFamily:"'Playfair Display',serif",fontSize:'20px',fontWeight:600,color:'white'}}>{job.title}</div></div>
+                <button onClick={()=>setSelected(null)} style={{background:'rgba(255,255,255,.15)',border:'none',borderRadius:6,width:28,height:28,cursor:'pointer',color:'white',fontSize:'14px',display:'flex',alignItems:'center',justifyContent:'center'}}>✕</button>
               </div>
               <div style={{marginTop:'.85rem',fontSize:'13px',color:'rgba(255,255,255,.8)',lineHeight:1.6}}>{job.summary}</div>
               <div style={{display:'flex',gap:'1.5rem',marginTop:'1rem',flexWrap:'wrap'}}>
-                <div>
-                  <div style={{fontSize:'10px',color:'rgba(255,255,255,.5)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700}}>Reports to</div>
-                  <div style={{fontSize:'12.5px',color:'rgba(255,255,255,.9)',marginTop:'2px'}}>{job.reports_to}</div>
-                </div>
-                <div>
-                  <div style={{fontSize:'10px',color:'rgba(255,255,255,.5)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700}}>Supervises</div>
-                  <div style={{fontSize:'12.5px',color:'rgba(255,255,255,.9)',marginTop:'2px'}}>{job.supervises}</div>
-                </div>
+                <div><div style={{fontSize:'10px',color:'rgba(255,255,255,.5)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700}}>Reports to</div><div style={{fontSize:'12.5px',color:'rgba(255,255,255,.9)',marginTop:'2px'}}>{job.reports_to}</div></div>
+                <div><div style={{fontSize:'10px',color:'rgba(255,255,255,.5)',textTransform:'uppercase',letterSpacing:'.08em',fontWeight:700}}>Supervises</div><div style={{fontSize:'12.5px',color:'rgba(255,255,255,.9)',marginTop:'2px'}}>{job.supervises}</div></div>
               </div>
             </div>
             <div className="panel-body">
-              {job.note && (
-                <div style={{background:'#fff8e1',border:'1px solid #ffe082',borderRadius:8,padding:'.75rem 1rem',marginBottom:'1.25rem',fontSize:'12.5px',color:'#7a5800',lineHeight:1.6}}>
-                  📌 {job.note}
-                </div>
-              )}
+              {job.note&&<div style={{background:'#fff8e1',border:'1px solid #ffe082',borderRadius:8,padding:'.75rem 1rem',marginBottom:'1.25rem',fontSize:'12.5px',color:'#7a5800',lineHeight:1.6}}>📌 {job.note}</div>}
               <div style={{fontWeight:700,fontSize:'12px',color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'.75rem'}}>Key Responsibilities</div>
               <div style={{display:'flex',flexDirection:'column',gap:'.6rem'}}>
-                {job.responsibilities.map((r,i) => (
+                {job.responsibilities.map((r,i)=>(
                   <div key={i} style={{display:'flex',gap:'.75rem',alignItems:'flex-start'}}>
                     <span style={{width:20,height:20,borderRadius:'50%',background:job.color,color:'white',fontSize:'10px',fontWeight:700,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0,marginTop:'1px'}}>{i+1}</span>
                     <span style={{fontSize:'13.5px',color:'var(--text)',lineHeight:1.6}}>{r}</span>
@@ -4681,13 +3719,6 @@ function JobDescriptions() {
   );
 }
 
-// ════════════════════════════════════════════════════════
-// SCHEDULE SYSTEM
-// Bell schedule + individual staff schedules
-// Drag-and-drop builder for HR
-// ════════════════════════════════════════════════════════
-
-// LHS Bell Schedule — real time → game time mapping
 const BELL_SCHEDULE = [
   { period:'1st Period',  realStart:'08:00', realEnd:'08:50', gameStart:'8:00 AM',  gameEnd:'9:15 AM',  color:'#3b82f6' },
   { period:'2nd Period',  realStart:'08:54', realEnd:'09:44', gameStart:'9:20 AM',  gameEnd:'10:35 AM', color:'#8b5cf6' },
@@ -5402,6 +4433,758 @@ function ScheduleBuilder({ profile }) {
   );
 }
 // ── Manage Bell Schedule (Admin) ──
+
+function inferGradesFromName(name) {
+  const grades = [];
+  const text = name.toLowerCase();
+  if (/\b9(th)?\b/.test(text))  grades.push('9');
+  if (/\b10(th)?\b/.test(text)) grades.push('10');
+  if (/\b11(th)?\b/.test(text)) grades.push('11');
+  if (/\b12(th)?\b/.test(text)) grades.push('12');
+  if (/freshman/.test(text))    grades.push('9');
+  if (/sophomore/.test(text))   grades.push('10');
+  if (/junior/.test(text))      grades.push('11');
+  if (/senior/.test(text))      grades.push('12');
+  if (/\bap\b|advanced/.test(text) && grades.length === 0) grades.push('11','12');
+  if (/honor/.test(text) && grades.length === 0) grades.push('10','11','12');
+  return [...new Set(grades)];
+}
+
+function autoScheduleCourses(courses, availablePeriods) {
+  // ─────────────────────────────────────────────────────────────────
+  // MODEL (matches the LHS bell schedule image):
+  //   • Each period has exactly ONE slot per grade (9/10/11/12)
+  //   • A grade's slot for a period = one course
+  //   • Same teacher can't teach two classes in the same period
+  //   • A course with grades [9] only occupies the grade-9 slot
+  //   • A course with grades [9,10] occupies BOTH the grade-9 AND grade-10 slot
+  //     in the same period (co-taught / combined class)
+  //
+  // ALGORITHM: greedy CSP with backtracking
+  //   1. Infer grades from name if not set
+  //   2. Sort by most-constrained first (single-grade courses first,
+  //      then fewest-teacher courses — they have the least flexibility)
+  //   3. For each course, find valid periods where:
+  //        - no teacher conflict
+  //        - no grade-slot already taken
+  //   4. Assign to least-loaded valid period; backtrack if stuck
+  //   5. Courses that truly can't fit are returned as conflicts
+  // ─────────────────────────────────────────────────────────────────
+
+  const ALL_GRADES = ['9','10','11','12'];
+
+  // Step 1: enrich — infer grades from name
+  const enriched = courses.map(c => {
+    let grades = (c.grades && c.grades.length > 0) ? [...c.grades] : inferGradesFromName(c.name);
+    // Single-grade name inference: "English 9" → ['9'], not ['9','10','11','12']
+    // Only fall back to all-grades if truly no indicator at all
+    if (grades.length === 0) grades = [...ALL_GRADES];
+    return { ...c, grades };
+  });
+
+  // Step 2: sort — most constrained first
+  // Most constrained = single grade (conflicts with more other single-grade courses)
+  //                  + fewer teachers (less flexibility in assignment)
+  const sorted = [...enriched].sort((a, b) => {
+    const gradeDiff = a.grades.length - b.grades.length;
+    if (gradeDiff !== 0) return gradeDiff; // single-grade first
+    return (a.teacherIds||[]).length - (b.teacherIds||[]).length; // fewer teachers first
+  });
+
+  const assigned = [];
+  const conflicts = [];
+
+  // State: immutable maps passed through recursion for clean backtracking
+  // gradeSlots[grade][period] = true  → that grade's period slot is taken
+  // teacherSlots[teacherId][period] = true → teacher busy that period
+  const initGradeSlots = () => {
+    const m = {};
+    ALL_GRADES.forEach(g => { m[g] = {}; });
+    return m;
+  };
+  const initTeacherSlots = () => ({});
+  const initPeriodLoad = () => {
+    const m = {};
+    availablePeriods.forEach(p => { m[p] = 0; });
+    return m;
+  };
+
+  function cloneGradeSlots(gs) {
+    const m = {};
+    ALL_GRADES.forEach(g => { m[g] = { ...gs[g] }; });
+    return m;
+  }
+
+  function tryAssign(idx, gradeSlots, teacherSlots, periodLoad) {
+    if (idx === sorted.length) return true;
+
+    const course = sorted[idx];
+    const teachers = course.teacherIds || [];
+    const grades = course.grades;
+
+    // Valid periods: none of this course's grades are taken AND no teacher conflict
+    const validPeriods = availablePeriods.filter(period => {
+      // Teacher conflict check
+      for (const tid of teachers) {
+        if (teacherSlots[tid] && teacherSlots[tid][period]) return false;
+      }
+      // Grade slot conflict check — ALL grades this course needs must be free
+      for (const g of grades) {
+        if (gradeSlots[g] && gradeSlots[g][period]) return false;
+      }
+      return true;
+    });
+
+    if (validPeriods.length === 0) {
+      // Truly can't schedule — record conflict, skip, keep going
+      conflicts.push(course.name);
+      return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
+    }
+
+    // Try periods in order of least load (spread the schedule evenly)
+    const ordered = [...validPeriods].sort((a, b) => (periodLoad[a]||0) - (periodLoad[b]||0));
+
+    for (const period of ordered) {
+      // Clone state for this branch
+      const newGradeSlots = cloneGradeSlots(gradeSlots);
+      const newTeacherSlots = { ...teacherSlots };
+      const newPeriodLoad = { ...periodLoad };
+
+      // Mark grade slots
+      for (const g of grades) {
+        newGradeSlots[g][period] = true;
+      }
+      // Mark teacher slots
+      for (const tid of teachers) {
+        newTeacherSlots[tid] = { ...(newTeacherSlots[tid]||{}), [period]: true };
+      }
+      newPeriodLoad[period] = (newPeriodLoad[period]||0) + 1;
+
+      assigned.push({ ...course, period });
+      if (tryAssign(idx + 1, newGradeSlots, newTeacherSlots, newPeriodLoad)) return true;
+
+      // Backtrack
+      assigned.pop();
+    }
+
+    // All periods failed — conflict
+    conflicts.push(course.name);
+    return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
+  }
+
+  tryAssign(0, initGradeSlots(), initTeacherSlots(), initPeriodLoad());
+
+  // Deduplicate conflicts (course may have been pushed multiple times on backtrack)
+  const uniqueConflicts = [...new Set(conflicts)];
+  // Remove any that ended up assigned via a later branch
+  const assignedIds = new Set(assigned.map(c => c.id));
+  const finalConflicts = uniqueConflicts.filter(name => !assigned.find(c => c.name === name));
+
+  return { assigned, conflicts: finalConflicts };
+}
+
+
+// ── Course scheduler constants ──
+const GRADE_COLORS = { '9':'#3b82f6','10':'#8b5cf6','11':'#ec4899','12':'#f59e0b' };
+const TYPE_ICON = { core:'✏️', elective:'🎨' };
+
+function ManageCourses({ profile }) {
+  const [tab, setTab] = useState('scheduler'); // 'scheduler' | 'courses' | 'auto'
+  const [courses, setCourses] = useState([]);
+  const [users, setUsers] = useState([]);
+  const [bellPeriods, setBellPeriods] = useState([]);
+  const [modal, setModal] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name:'', type:'core', teacherIds:[], grades:[], period:'' });
+  const [saving, setSaving] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleResult, setScheduleResult] = useState(null);
+  const dragItem = useRef(null);
+  const dragOver = useRef(null);
+
+  const GRADES = ['9','10','11','12'];
+  const NON_TEACHING_RE = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
+
+  useEffect(() => {
+    const unsub = db.collection('courses').onSnapshot(s => {
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      docs.sort((a,b)=>(a.sortOrder??0)-(b.sortOrder??0));
+      setCourses(docs);
+    });
+    db.collection('users').onSnapshot(s => setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active')));
+    db.collection('settings').doc('bell_schedule').onSnapshot(doc => {
+      const raw = (doc.exists && doc.data().periods?.length) ? doc.data().periods : BELL_SCHEDULE;
+      const teaching = raw.filter(b => b.type !== 'break' && !NON_TEACHING_RE.test(b.period)).map(b => b.period);
+      setBellPeriods(teaching.length > 0 ? teaching : ['1st Period','2nd Period','3rd Period','4th Period','5th Period','6th Period']);
+    });
+    return unsub;
+  }, []);
+
+  // ── Course CRUD ──
+  const openNew  = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:''}); setModal(true); };
+  const openEdit = (c) => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||''}); setModal(true); };
+  const toggleTeacher = uid => setForm(f=>({...f,teacherIds:f.teacherIds.includes(uid)?f.teacherIds.filter(x=>x!==uid):[...f.teacherIds,uid]}));
+
+  const saveCourse = async () => {
+    if (!form.name) return;
+    setSaving(true);
+    const teacherNames = form.teacherIds.map(id=>users.find(u=>u.id===id)?.displayName||'').filter(Boolean);
+    if (editing) {
+      await db.collection('courses').doc(editing.id).update({...form, teacherNames});
+      await addLog(profile.id, profile.displayName, 'Updated course', form.name);
+    } else {
+      await db.collection('courses').add({...form, teacherNames, sortOrder:courses.length, createdAt:firebase.firestore.FieldValue.serverTimestamp()});
+      await addLog(profile.id, profile.displayName, 'Created course', form.name);
+    }
+    setModal(false); setSaving(false);
+  };
+
+  const deleteCourse = async c => {
+    if (!confirm(`Delete "${c.name}"?`)) return;
+    await db.collection('courses').doc(c.id).delete();
+    await addLog(profile.id, profile.displayName, 'Deleted course', c.name);
+  };
+
+  // ── Drag reorder in courses list ──
+  const onDragStart = (e,idx) => { dragItem.current=idx; e.currentTarget.classList.add('dragging'); };
+  const onDragEnter = (e,idx) => { dragOver.current=idx; e.currentTarget.classList.add('drag-over'); };
+  const onDragLeave = e => e.currentTarget.classList.remove('drag-over');
+  const onDragEnd = async e => {
+    e.currentTarget.classList.remove('dragging');
+    document.querySelectorAll('.drag-row').forEach(r=>r.classList.remove('drag-over'));
+    if (dragItem.current===null||dragOver.current===null||dragItem.current===dragOver.current) return;
+    const reordered = [...courses];
+    const [moved] = reordered.splice(dragItem.current,1);
+    reordered.splice(dragOver.current,0,moved);
+    dragItem.current=null; dragOver.current=null;
+    const batch = db.batch();
+    reordered.forEach((c,i) => batch.update(db.collection('courses').doc(c.id),{sortOrder:i}));
+    await batch.commit();
+  };
+
+  // ── Auto-schedule ──
+  const runAutoSchedule = async () => {
+    setScheduling(true);
+    const bellDoc = await db.collection('settings').doc('bell_schedule').get();
+    let bells = BELL_SCHEDULE;
+    if (bellDoc.exists && bellDoc.data().periods?.length) bells = bellDoc.data().periods;
+    const NON_TEACHING = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
+    const teachingPeriods = bells.filter(b=>b.type!=='break'&&!NON_TEACHING.test(b.period)).map(b=>b.period);
+    console.log('[AutoScheduler] Periods:', teachingPeriods);
+    courses.forEach(c=>{
+      const g=c.grades?.length>0?c.grades:inferGradesFromName(c.name);
+      console.log(`  "${c.name}" grades:`,g.length>0?g:['9','10','11','12']);
+    });
+    const result = autoScheduleCourses(courses, teachingPeriods);
+    result.bellPeriods = teachingPeriods;
+    const batch = db.batch();
+    for (const c of result.assigned) {
+      const inferredGrades = c.grades?.length>0?c.grades:inferGradesFromName(c.name);
+      const finalGrades = inferredGrades.length>0?inferredGrades:['9','10','11','12'];
+      batch.update(db.collection('courses').doc(c.id),{period:c.period, grades:finalGrades});
+    }
+    await batch.commit();
+    await addLog(profile.id, profile.displayName, 'Auto-scheduled courses', `${result.assigned.length} assigned, ${result.conflicts.length} conflicts`);
+    setScheduleResult(result);
+    setScheduling(false);
+    setTab('scheduler'); // switch to visual after auto
+  };
+
+  // ── Visual drag-drop scheduler ──
+  // grid: period → grade → courseId
+  // All useState hooks must be declared before useMemo
+  const [draggingCourse, setDraggingCourse] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+
+  const gridAssignment = useMemo(() => {
+    const grid = {};
+    bellPeriods.forEach(p => { grid[p] = {}; GRADES.forEach(g => { grid[p][g] = null; }); });
+    courses.forEach(c => {
+      if (!c.period) return;
+      const grades = c.grades?.length>0 ? c.grades : inferGradesFromName(c.name);
+      const finalGrades = grades.length>0 ? grades : GRADES;
+      if (grid[c.period]) {
+        finalGrades.forEach(g => { if (grid[c.period]) grid[c.period][g] = c; });
+      }
+    });
+    return grid;
+  }, [courses, bellPeriods]);
+
+  const unscheduled = courses.filter(c => !c.period);
+
+  const dropCourseIntoCell = async (period, grade, course) => {
+    if (!course) return;
+    const inferredGrades = course.grades?.length>0 ? course.grades : inferGradesFromName(course.name);
+    const finalGrades = inferredGrades.length>0 ? inferredGrades : GRADES;
+
+    // Check conflicts: does any of this course's grades already have something in this period?
+    const conflicts = finalGrades.filter(g => {
+      const existing = gridAssignment[period]?.[g];
+      return existing && existing.id !== course.id;
+    });
+
+    if (conflicts.length > 0) {
+      if (!confirm(`Grade ${conflicts.join('/')} already has a class in ${period}. Replace it?`)) return;
+      // Remove conflicting courses from that period
+      const toRemove = finalGrades.map(g=>gridAssignment[period]?.[g]).filter(c=>c&&c.id!==course.id);
+      const uniqueToRemove = [...new Map(toRemove.map(c=>[c.id,c])).values()];
+      const batch2 = db.batch();
+      uniqueToRemove.forEach(c => batch2.update(db.collection('courses').doc(c.id),{period:''}));
+      // Clear old period from the dragged course if it had one
+      if (course.period && course.period !== period) batch2.update(db.collection('courses').doc(course.id),{period:''});
+      await batch2.commit();
+    }
+
+    await db.collection('courses').doc(course.id).update({ period, grades: finalGrades });
+  };
+
+  const removeCourseFromPeriod = async course => {
+    await db.collection('courses').doc(course.id).update({ period: '' });
+  };
+
+  // Course card component (defined inside to access draggingCourse state)
+  const CourseChip = ({ course, inCell, onRemove }) => {
+    const grades = course.grades?.length>0?course.grades:inferGradesFromName(course.name);
+    const finalGrades = grades.length>0?grades:GRADES;
+    return (
+      <div
+        draggable
+        onDragStart={e=>{e.stopPropagation();setDraggingCourse(course);}}
+        onDragEnd={()=>setDraggingCourse(null)}
+        style={{
+          background: inCell?'var(--white)':'var(--bg)',
+          border:'1px solid var(--border)',
+          borderLeft:`3px solid ${course.type==='core'?'#3b82f6':'#8b5cf6'}`,
+          borderRadius:7, padding:'.35rem .6rem',
+          cursor:'grab', userSelect:'none',
+          fontSize:'11.5px', lineHeight:1.35,
+          display:'flex', alignItems:'center', gap:'.4rem',
+          boxShadow: draggingCourse?.id===course.id?'0 4px 16px rgba(0,0,0,.2)':'var(--shadow-sm)',
+          opacity: draggingCourse?.id===course.id?0.5:1,
+          minWidth:0,
+        }}
+      >
+        <span style={{flexShrink:0,fontSize:'12px'}}>{TYPE_ICON[course.type]||'📚'}</span>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:600,color:'var(--navy)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{course.name}</div>
+          <div style={{display:'flex',gap:'.2rem',marginTop:'2px',flexWrap:'wrap'}}>
+            {finalGrades.sort().map(g=>(
+              <span key={g} style={{fontSize:'9px',fontWeight:700,padding:'0px 4px',borderRadius:4,background:GRADE_COLORS[g]+'22',color:GRADE_COLORS[g]}}>Gr{g}</span>
+            ))}
+          </div>
+        </div>
+        {inCell && onRemove && (
+          <button onClick={e=>{e.stopPropagation();onRemove(course);}} style={{background:'none',border:'none',cursor:'pointer',color:'#ccc',fontSize:'12px',padding:'0 2px',flexShrink:0,lineHeight:1}} title="Remove from period">×</button>
+        )}
+      </div>
+    );
+  };
+
+  const core = courses.filter(c=>c.type!=='elective');
+  const elective = courses.filter(c=>c.type==='elective');
+
+  return (
+    <div>
+      {/* Tabs */}
+      <div style={{display:'flex',gap:'.25rem',marginBottom:'1.25rem',background:'var(--bg2)',borderRadius:10,padding:4,width:'fit-content'}}>
+        {[['scheduler','📅 Visual Scheduler'],['courses','📋 Course List'],['auto','⚡ Auto-Schedule']].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{
+            padding:'.45rem 1rem',fontSize:'13px',fontWeight:tab===id?600:400,
+            border:'none',background:tab===id?'var(--white)':'transparent',
+            borderRadius:8,cursor:'pointer',color:tab===id?'var(--navy)':'var(--text3)',
+            fontFamily:'inherit',transition:'all .15s',boxShadow:tab===id?'var(--shadow-sm)':'none',
+            whiteSpace:'nowrap',
+          }}>{label}</button>
+        ))}
+      </div>
+
+      {/* ═══════════════ VISUAL SCHEDULER TAB ═══════════════ */}
+      {tab==='scheduler' && (
+        <div style={{display:'grid',gridTemplateColumns:'1fr 220px',gap:'1.25rem',alignItems:'start'}}>
+          {/* Main grid */}
+          <div className="panel" style={{overflow:'hidden'}}>
+            <div className="panel-header">
+              <div>
+                <div className="panel-title">Period Schedule</div>
+                <div className="panel-subtitle">Drag courses from the right into period/grade cells · Click × to unassign</div>
+              </div>
+              <div style={{display:'flex',gap:'.35rem'}}>
+                {GRADES.map(g=>(
+                  <span key={g} style={{fontSize:'11px',fontWeight:600,padding:'3px 8px',borderRadius:6,background:GRADE_COLORS[g]+'22',color:GRADE_COLORS[g]}}>Gr{g}</span>
+                ))}
+              </div>
+            </div>
+
+            {bellPeriods.length===0 ? (
+              <div className="empty"><span className="empty-icon">🔔</span><div className="empty-text">No periods configured</div><div className="empty-sub">Set up your Bell Schedule first</div></div>
+            ) : (
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',minWidth:600}}>
+                  <thead>
+                    <tr>
+                      <th style={{background:'var(--navy)',color:'white',padding:'.6rem .85rem',fontSize:'11.5px',fontWeight:700,textAlign:'left',width:120,position:'sticky',left:0,zIndex:3}}>Period</th>
+                      {GRADES.map(g=>(
+                        <th key={g} style={{background:GRADE_COLORS[g],color:'white',padding:'.6rem .85rem',fontSize:'12px',fontWeight:700,textAlign:'center',minWidth:160}}>
+                          Grade {g}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bellPeriods.map((period,pi) => (
+                      <tr key={period} style={{borderBottom:'1px solid var(--border)'}}>
+                        {/* Period label */}
+                        <td style={{
+                          padding:'.5rem .85rem',fontWeight:600,fontSize:'12px',color:'var(--navy)',
+                          background:pi%2===0?'var(--bg)':'#f5f5f2',
+                          borderRight:'2px solid var(--border)',
+                          position:'sticky',left:0,zIndex:2,whiteSpace:'nowrap',
+                        }}>{period}</td>
+                        {/* Grade cells */}
+                        {GRADES.map(g => {
+                          const cellCourse = gridAssignment[period]?.[g];
+                          const isTarget = dropTarget?.period===period && dropTarget?.grade===g;
+                          return (
+                            <td key={g}
+                              onDragOver={e=>{e.preventDefault();setDropTarget({period,grade:g});}}
+                              onDragLeave={()=>setDropTarget(null)}
+                              onDrop={async e=>{
+                                e.preventDefault();setDropTarget(null);
+                                if(draggingCourse) await dropCourseIntoCell(period,g,draggingCourse);
+                              }}
+                              style={{
+                                padding:'.35rem .4rem',
+                                verticalAlign:'top',
+                                background: isTarget
+                                  ? 'rgba(29,158,117,.08)'
+                                  : pi%2===0?'var(--white)':'#fafaf9',
+                                border: isTarget?`2px dashed var(--teal)`:`1px solid var(--border)`,
+                                transition:'all .1s',
+                                minHeight:52,
+                              }}
+                            >
+                              {cellCourse ? (
+                                <CourseChip course={cellCourse} inCell={true} onRemove={removeCourseFromPeriod}/>
+                              ) : (
+                                <div style={{height:44,display:'flex',alignItems:'center',justifyContent:'center',color:isTarget?'var(--teal)':'#d1d5db',fontSize:'11px',fontStyle:'italic'}}>
+                                  {isTarget?'Drop here':'—'}
+                                </div>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Right panel: unscheduled courses */}
+          <div style={{position:'sticky',top:'1rem',display:'flex',flexDirection:'column',gap:'.85rem'}}>
+            <div className="panel">
+              <div className="panel-header" style={{padding:'.75rem 1rem'}}>
+                <div>
+                  <div className="panel-title" style={{fontSize:'14px'}}>Unscheduled</div>
+                  <div className="panel-subtitle">{unscheduled.length} course{unscheduled.length!==1?'s':''}</div>
+                </div>
+              </div>
+              <div style={{padding:'.6rem',display:'flex',flexDirection:'column',gap:'.35rem',maxHeight:400,overflowY:'auto'}}>
+                {unscheduled.length===0 ? (
+                  <div style={{textAlign:'center',padding:'1rem',color:'var(--text3)',fontSize:'12px'}}>All courses scheduled ✓</div>
+                ) : unscheduled.map(c=>(
+                  <CourseChip key={c.id} course={c} inCell={false}/>
+                ))}
+              </div>
+            </div>
+
+            {/* All courses (already scheduled) */}
+            <div className="panel">
+              <div className="panel-header" style={{padding:'.75rem 1rem'}}>
+                <div className="panel-title" style={{fontSize:'14px'}}>All Courses</div>
+              </div>
+              <div style={{padding:'.6rem',display:'flex',flexDirection:'column',gap:'.35rem',maxHeight:300,overflowY:'auto'}}>
+                {courses.filter(c=>c.period).map(c=>(
+                  <CourseChip key={c.id} course={c} inCell={false}/>
+                ))}
+              </div>
+            </div>
+
+            {/* Legend */}
+            <div style={{background:'var(--bg)',borderRadius:8,padding:'.75rem',fontSize:'11.5px',color:'var(--text3)'}}>
+              <div style={{fontWeight:600,marginBottom:'.4rem',color:'var(--text2)'}}>How to use:</div>
+              <div>• Drag courses into cells to schedule them</div>
+              <div style={{marginTop:'.2rem'}}>• Click × on a cell to unassign</div>
+              <div style={{marginTop:'.2rem'}}>• Drag between cells to move</div>
+              <div style={{marginTop:'.2rem'}}>• Use ⚡ Auto-Schedule tab to fill automatically</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════ COURSE LIST TAB ═══════════════ */}
+      {tab==='courses' && (
+        <div>
+          <div style={{display:'flex',justifyContent:'flex-end',marginBottom:'1rem'}}>
+            <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={13}/> New Course</button>
+          </div>
+          {[['Core Courses',core],['Electives',elective]].map(([label,list])=>(
+            <div key={label} className="panel" style={{marginBottom:'1rem'}}>
+              <div className="panel-header">
+                <span className="panel-title">{label}</span>
+                <span className="badge badge-navy">{list.length}</span>
+              </div>
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th style={{width:32}}></th><th>Course</th><th>Period</th><th>Grades</th><th>Teachers</th><th/></tr></thead>
+                  <tbody>
+                    {list.length===0
+                      ? <tr><td colSpan="6"><div className="empty"><div className="empty-text">No {label.toLowerCase()} yet</div></div></td></tr>
+                      : list.map(c=>(
+                        <tr key={c.id} className="drag-row" draggable
+                          onDragStart={e=>onDragStart(e,courses.indexOf(c))}
+                          onDragEnter={e=>onDragEnter(e,courses.indexOf(c))}
+                          onDragLeave={onDragLeave} onDragEnd={onDragEnd}
+                          onDragOver={e=>e.preventDefault()}>
+                          <td><span className="drag-handle">⠿</span></td>
+                          <td style={{fontWeight:500}}>{c.name}</td>
+                          <td style={{fontSize:'12px'}}>
+                            {c.period
+                              ? <span style={{color:'var(--teal)',fontWeight:600}}>{c.period}</span>
+                              : <span style={{color:'var(--text3)'}}>—</span>}
+                          </td>
+                          <td>
+                            {(c.grades||[]).length>0
+                              ? (c.grades||[]).sort().map(g=><span key={g} className="badge badge-navy" style={{fontSize:'10px',marginRight:2}}>Gr {g}</span>)
+                              : <span style={{color:'var(--text3)',fontSize:'12px'}}>—</span>}
+                          </td>
+                          <td>
+                            {(c.teacherIds||[]).length===0
+                              ? <span style={{color:'var(--text3)',fontSize:'12px'}}>None assigned</span>
+                              : (c.teacherIds||[]).map(id=>{const u=users.find(u=>u.id===id);return u?<span key={id} className="course-tag-teal course-tag">{u.displayName}</span>:null;})}
+                          </td>
+                          <td style={{display:'flex',gap:'.4rem'}}>
+                            <button className="btn btn-ghost btn-sm" onClick={()=>openEdit(c)}><Icon name="edit" size={12}/></button>
+                            <button className="btn btn-danger btn-sm" onClick={()=>deleteCourse(c)}><Icon name="trash" size={12}/></button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ═══════════════ AUTO-SCHEDULE TAB ═══════════════ */}
+      {tab==='auto' && (
+        <div>
+          <div className="panel" style={{marginBottom:'1.25rem'}}>
+            <div className="panel-header">
+              <div>
+                <div className="panel-title">⚡ Auto-Schedule</div>
+                <div className="panel-subtitle">Automatically assigns every course to a period with no conflicts</div>
+              </div>
+            </div>
+            <div className="panel-body">
+              {/* How it works */}
+              <div style={{background:'#f0fdf8',border:'1px solid #9fe1cb',borderRadius:10,padding:'1rem 1.25rem',marginBottom:'1.25rem',fontSize:'13px',color:'#0a5c45',lineHeight:1.7}}>
+                <div style={{fontWeight:700,marginBottom:'.35rem'}}>How it works:</div>
+                <div>1. <strong>Grades are inferred from course names</strong> — "English 9" → Grade 9, "Biology" (no number) → all grades</div>
+                <div>2. <strong>Conflicts are avoided</strong> — no two courses with the same grade get the same period; no teacher teaches two classes at once</div>
+                <div>3. <strong>Courses are spread evenly</strong> across all {bellPeriods.length} teaching periods</div>
+                <div>4. After running, switch to the <strong>Visual Scheduler</strong> tab to drag and adjust</div>
+              </div>
+
+              {/* Per-course preview of grade detection */}
+              <div style={{marginBottom:'1.25rem'}}>
+                <div style={{fontSize:'12px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em',marginBottom:'.6rem'}}>
+                  Grade detection preview — {courses.length} courses
+                </div>
+                <div style={{border:'1px solid var(--border)',borderRadius:8,overflow:'hidden'}}>
+                  <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',background:'var(--bg)',padding:'.4rem .75rem',fontSize:'11px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.05em',borderBottom:'1px solid var(--border)'}}>
+                    <span>Course</span><span>Detected grades</span><span style={{width:80,textAlign:'center'}}>Period</span>
+                  </div>
+                  <div style={{maxHeight:320,overflowY:'auto'}}>
+                    {courses.map((c,i)=>{
+                      const inferred = c.grades?.length>0?c.grades:inferGradesFromName(c.name);
+                      const final = inferred.length>0?inferred:GRADES;
+                      const isAllGrades = final.length===4;
+                      return (
+                        <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',alignItems:'center',padding:'.45rem .75rem',borderBottom:i<courses.length-1?'1px solid var(--border)':'none',background:i%2===0?'var(--white)':'var(--bg)'}}>
+                          <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+                            <span style={{fontSize:'12px'}}>{c.type==='core'?'✏️':'🎨'}</span>
+                            <span style={{fontWeight:500,fontSize:'13px',color:'var(--navy)'}}>{c.name}</span>
+                          </div>
+                          <div style={{display:'flex',gap:'.2rem',flexWrap:'wrap',justifyContent:'flex-end',padding:'0 .75rem'}}>
+                            {final.sort().map(g=>(
+                              <span key={g} style={{fontSize:'10px',fontWeight:700,padding:'1px 6px',borderRadius:6,background:GRADE_COLORS[g]+'22',color:GRADE_COLORS[g]}}>Gr{g}</span>
+                            ))}
+                            {isAllGrades && <span style={{fontSize:'10px',color:'#f59e0b',marginLeft:'.25rem'}}>⚠️ all</span>}
+                          </div>
+                          <div style={{width:80,textAlign:'center',fontSize:'12px',fontWeight:c.period?600:400,color:c.period?'var(--teal)':'var(--text3)'}}>
+                            {c.period||'—'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div style={{fontSize:'11.5px',color:'#b07d00',marginTop:'.5rem',background:'#fffbeb',border:'1px solid #fde68a',borderRadius:6,padding:'.5rem .75rem'}}>
+                  ⚠️ Courses showing <strong>all 4 grades</strong> (no grade number in name) will block an entire period for all grades. If you have many such courses, set their grades manually in the Course List tab first, then re-run.
+                </div>
+              </div>
+
+              <div style={{display:'flex',alignItems:'center',gap:'1rem'}}>
+                <button
+                  className="btn btn-primary"
+                  style={{background:'linear-gradient(135deg,#1D9E75,#0f6e56)',fontWeight:700,fontSize:'14px',padding:'.6rem 1.5rem'}}
+                  onClick={runAutoSchedule}
+                  disabled={scheduling||courses.length===0}
+                >
+                  {scheduling?<><div className="spinner" style={{width:14,height:14,marginRight:6}}/> Scheduling...</>:`⚡ Auto-schedule ${courses.length} courses →`}
+                </button>
+                <div style={{fontSize:'12px',color:'var(--text3)'}}>
+                  {bellPeriods.length} teaching periods · {courses.length} courses
+                </div>
+              </div>
+
+              {/* Result after auto-schedule */}
+              {scheduleResult && (
+                <div style={{marginTop:'1.5rem'}}>
+                  <div style={{fontWeight:700,fontSize:'13px',color:'var(--navy)',marginBottom:'.75rem'}}>
+                    Result — {scheduleResult.assigned.length} assigned · {scheduleResult.conflicts.length} conflicts
+                  </div>
+                  {/* Grid result */}
+                  <div style={{overflowX:'auto',border:'1px solid var(--border)',borderRadius:8}}>
+                    <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+                      <thead>
+                        <tr style={{background:'var(--navy)'}}>
+                          <th style={{padding:'.5rem .75rem',color:'white',textAlign:'left',fontWeight:600,width:100}}>Period</th>
+                          {GRADES.map(g=>(
+                            <th key={g} style={{padding:'.5rem .75rem',color:'white',textAlign:'center',fontWeight:600,background:GRADE_COLORS[g]}}>Grade {g}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(scheduleResult.bellPeriods||bellPeriods).map((period,pi)=>{
+                          const rowMap = {};
+                          scheduleResult.assigned.filter(c=>c.period===period).forEach(c=>{
+                            const grades=c.grades?.length>0?c.grades:inferGradesFromName(c.name);
+                            const final=grades.length>0?grades:GRADES;
+                            final.forEach(g=>{ rowMap[g]=c; });
+                          });
+                          return (
+                            <tr key={period} style={{borderBottom:'1px solid var(--border)',background:pi%2===0?'var(--white)':'var(--bg)'}}>
+                              <td style={{padding:'.4rem .75rem',fontWeight:600,color:'var(--navy)',fontSize:'11.5px',borderRight:'2px solid var(--border)'}}>{period}</td>
+                              {GRADES.map(g=>{
+                                const c=rowMap[g];
+                                return (
+                                  <td key={g} style={{padding:'.3rem .4rem',textAlign:'center'}}>
+                                    {c?(
+                                      <div style={{background:c.type==='core'?'#ebf0ff':'#f0ebff',border:`1px solid ${c.type==='core'?'#c5d0f5':'#d5c8f5'}`,borderRadius:6,padding:'.25rem .4rem',fontSize:'11px',fontWeight:600,color:'var(--navy)'}}>{c.name}</div>
+                                    ):(
+                                      <span style={{color:'#d1d5db'}}>—</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  {scheduleResult.conflicts.length>0&&(
+                    <div style={{marginTop:'.75rem',background:'#fff5f5',border:'1px solid #fca5a5',borderRadius:8,padding:'.75rem 1rem'}}>
+                      <div style={{fontWeight:700,fontSize:'12px',color:'#c0392b',marginBottom:'.35rem'}}>⚠️ Couldn't assign ({scheduleResult.conflicts.length}):</div>
+                      {scheduleResult.conflicts.map((name,i)=>{
+                        const c=courses.find(c=>c.name===name);
+                        const g=c?.grades?.length>0?c.grades:inferGradesFromName(name);
+                        const final=g.length>0?g:GRADES;
+                        return <div key={i} style={{fontSize:'12px',color:'#c0392b',padding:'2px 0'}}>• {name} <span style={{opacity:.7}}>(grades: {final.map(x=>`Gr${x}`).join(', ')})</span></div>;
+                      })}
+                      <div style={{fontSize:'11px',color:'#c0392b',marginTop:'.4rem',opacity:.75}}>Go to Course List → set grades manually → re-run auto-schedule</div>
+                    </div>
+                  )}
+                  <button className="btn btn-primary btn-sm" style={{marginTop:'1rem'}} onClick={()=>setTab('scheduler')}>
+                    View in Visual Scheduler →
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════ COURSE MODAL ═══════════════ */}
+      {modal && (
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setModal(false)}>
+          <div className="modal" style={{maxWidth:520}}>
+            <div className="modal-header">
+              <span className="modal-title">{editing?'Edit Course':'New Course'}</span>
+              <button className="modal-close" onClick={()=>setModal(false)}><Icon name="x" size={14}/></button>
+            </div>
+            <div className="modal-body">
+              <div className="form-group">
+                <label className="form-label">Course name</label>
+                <input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. English 9, Photography"/>
+              </div>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'.75rem'}}>
+                <div className="form-group">
+                  <label className="form-label">Type</label>
+                  <select className="form-input form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
+                    <option value="core">Core course</option>
+                    <option value="elective">Elective</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Period</label>
+                  <select className="form-input form-select" value={form.period} onChange={e=>setForm(f=>({...f,period:e.target.value}))}>
+                    <option value="">— No period —</option>
+                    {bellPeriods.map(p=><option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Grade levels</label>
+                <div style={{display:'flex',gap:'.5rem',flexWrap:'wrap'}}>
+                  {GRADES.map(g=>(
+                    <label key={g} style={{display:'flex',alignItems:'center',gap:'.3rem',padding:'.4rem .75rem',border:`1.5px solid ${(form.grades||[]).includes(g)?GRADE_COLORS[g]:'var(--border)'}`,borderRadius:8,cursor:'pointer',background:(form.grades||[]).includes(g)?GRADE_COLORS[g]+'22':'transparent',transition:'all .12s'}}>
+                      <input type="checkbox" style={{display:'none'}} checked={(form.grades||[]).includes(g)} onChange={()=>setForm(f=>({...f,grades:(f.grades||[]).includes(g)?f.grades.filter(x=>x!==g):[...(f.grades||[]),g]}))}/>
+                      <span style={{fontSize:'13px',fontWeight:600,color:(form.grades||[]).includes(g)?GRADE_COLORS[g]:'var(--text2)'}}>Grade {g}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Assign teachers</label>
+                <div style={{maxHeight:180,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8,padding:'.5rem'}}>
+                  {users.length===0?<div style={{color:'var(--text3)',fontSize:'13px',padding:'.25rem'}}>No active staff</div>
+                    :users.map(u=>(
+                      <label key={u.id} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.35rem .25rem',cursor:'pointer',fontSize:'13px',borderRadius:6,background:form.teacherIds.includes(u.id)?'var(--bg)':'transparent'}}>
+                        <input type="checkbox" checked={form.teacherIds.includes(u.id)} onChange={()=>toggleTeacher(u.id)}/>
+                        <span style={{fontWeight:500}}>{u.rpName||u.displayName}</span>
+                        <span style={{color:'var(--text3)',fontSize:'11px'}}>{u.rankName}</span>
+                      </label>
+                    ))}
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={()=>setModal(false)}>Cancel</button>
+              <button className="btn btn-primary" onClick={saveCourse} disabled={saving||!form.name}>{saving?<div className="spinner"/>:'Save'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function ManageBellSchedule({ profile }) {
   const [periods, setPeriods] = useState(null); // null = loading
   const [saving, setSaving] = useState(false);
