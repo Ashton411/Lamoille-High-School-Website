@@ -820,53 +820,125 @@ function App() {
 // ── Login / Register ──
 
 function LoginPage({ user, setUser, setProfile }) {
-  const [tab, setTab] = useState('login');
+  const [tab, setTab] = useState('login');       // 'login' | 'register' | 'forgot' | 'verify'
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [robloxUsername, setRobloxUsername] = useState('');
   const [rpPrefix, setRpPrefix] = useState('Mr.');
   const [rpFirstName, setRpFirstName] = useState('');
   const [rpLastName, setRpLastName] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [pendingUser, setPendingUser] = useState(null); // Firebase user awaiting verification
 
+  const switchTab = (t) => { setTab(t); setError(''); setSuccess(''); };
+
+  // ── Sign In ──
   const handleLogin = async (e) => {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      await auth.signInWithEmailAndPassword(email, password);
+      const cred = await auth.signInWithEmailAndPassword(email, password);
+      // Reload to get latest emailVerified state
+      await cred.user.reload();
+      const fresh = auth.currentUser;
+      if (!fresh.emailVerified) {
+        // Block entry — show verify screen
+        setPendingUser(fresh);
+        await auth.signOut();
+        setTab('verify');
+        setLoading(false);
+        return;
+      }
+      // Check if their Firestore profile email is unverified/fake — warn them
+      const doc = await db.collection('users').doc(fresh.uid).get();
+      if (doc.exists) {
+        const data = doc.data();
+        // If stored email doesn't match auth email, flag it
+        if (data.email && data.email !== fresh.email) {
+          await db.collection('users').doc(fresh.uid).update({ emailWarning: true });
+        }
+      }
     } catch (err) {
-      setError('Invalid email or password.');
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+        setError('Invalid email or password.');
+      } else {
+        setError(err.message);
+      }
     }
     setLoading(false);
   };
 
+  // ── Register ──
   const handleRegister = async (e) => {
     e.preventDefault();
     setError(''); setLoading(true);
     const rpName = `${rpPrefix} ${rpFirstName.trim()} ${rpLastName.trim()}`;
     try {
       const cred = await auth.createUserWithEmailAndPassword(email, password);
+      // Send verification email immediately
+      await cred.user.sendEmailVerification();
       await db.collection('users').doc(cred.user.uid).set({
-        displayName: rpName,
-        rpName,
-        rpPrefix,
-        rpFirstName: rpFirstName.trim(),
-        rpLastName: rpLastName.trim(),
+        displayName: rpName, rpName, rpPrefix,
+        rpFirstName: rpFirstName.trim(), rpLastName: rpLastName.trim(),
         robloxUsername, email,
         rankId: null, rankName: 'Unranked', rankTier: 0,
         departmentId: null, departmentName: '—',
         status: 'pending',
+        emailVerified: false,
         createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       });
+      setPendingUser(cred.user);
       await auth.signOut();
-      setSuccess('Account created! Your account is pending approval from HR.');
-      setTab('login');
+      setTab('verify');
     } catch (err) {
-      setError(err.message);
+      if (err.code === 'auth/email-already-in-use') {
+        setError('An account with this email already exists. Please sign in.');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Password must be at least 6 characters.');
+      } else {
+        setError(err.message);
+      }
     }
     setLoading(false);
+  };
+
+  // ── Forgot Password ──
+  const handleForgotPassword = async (e) => {
+    e.preventDefault();
+    setError(''); setLoading(true);
+    try {
+      await auth.sendPasswordResetEmail(resetEmail.trim());
+      setSuccess(`Reset link sent to ${resetEmail}. Check your inbox.`);
+      setResetEmail('');
+    } catch (err) {
+      if (err.code === 'auth/user-not-found') {
+        setError('No account found with that email address.');
+      } else {
+        setError(err.message);
+      }
+    }
+    setLoading(false);
+  };
+
+  // ── Resend verification ──
+  const resendVerification = async () => {
+    setResending(true); setError('');
+    try {
+      // Re-sign in briefly to get a fresh user object to call sendEmailVerification
+      const cred = await auth.signInWithEmailAndPassword(pendingUser.email, password);
+      await cred.user.sendEmailVerification();
+      await auth.signOut();
+      setSuccess('Verification email resent! Check your inbox and spam folder.');
+    } catch {
+      setError('Could not resend. Try signing in again.');
+    }
+    setResending(false);
   };
 
   const [vh, setVh] = useState(window.innerHeight);
@@ -880,10 +952,8 @@ function LoginPage({ user, setUser, setProfile }) {
     <div style={{display:'flex', width:'100%', height: vh + 'px', background:'#060f24', overflow:'hidden'}}>
       {/* Left dark panel */}
       <div style={{flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', padding:'3rem', position:'relative', background:'#060f24'}}>
-        {/* Background glows */}
         <div style={{position:'absolute',inset:0,background:'radial-gradient(ellipse at 25% 75%, rgba(29,158,117,.2) 0%, transparent 55%), radial-gradient(ellipse at 75% 25%, rgba(26,52,112,.5) 0%, transparent 55%)',pointerEvents:'none'}}/>
         <div style={{position:'absolute',inset:0,backgroundImage:'linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px)',backgroundSize:'44px 44px',pointerEvents:'none'}}/>
-        {/* Content */}
         <div style={{position:'relative',zIndex:1,textAlign:'center',maxWidth:340}}>
           <div style={{width:100,height:100,margin:'0 auto 1.75rem',borderRadius:22,overflow:'hidden',boxShadow:'0 8px 40px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.1)'}}>
             <svg viewBox="0 0 100 100" width="100" height="100" xmlns="http://www.w3.org/2000/svg">
@@ -901,31 +971,91 @@ function LoginPage({ user, setUser, setProfile }) {
           <div style={{fontSize:13,color:'rgba(255,255,255,.22)',marginTop:'2rem',fontStyle:'italic'}}>Shaping Scholars, Building Futures</div>
         </div>
       </div>
+
       {/* Right form panel */}
       <div style={{width:440,flexShrink:0,background:'#f7f6f3',display:'flex',flexDirection:'column',justifyContent:'center',padding:'3.5rem 3rem',overflowY:'auto',boxShadow:'-20px 0 60px rgba(0,0,0,.3)'}}>
-        <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:600,color:'#0B1F4A',marginBottom:'.35rem'}}>{tab==='login' ? 'Welcome back' : 'Request access'}</div>
-        <div style={{fontSize:13,color:'#86857e',marginBottom:'2rem'}}>{tab==='login' ? 'Sign in to the HR portal' : 'Your account will be reviewed before activation'}</div>
-        <div className="login-tabs">
-          <button className={`login-tab${tab==='login'?' active':''}`} onClick={()=>{setTab('login');setError('');}}>Sign In</button>
-          <button className={`login-tab${tab==='register'?' active':''}`} onClick={()=>{setTab('register');setError('');}}>Register</button>
-        </div>
-        {error && <div className="alert alert-error">{error}</div>}
-        {success && <div className="alert alert-success">{success}</div>}
-        {tab === 'login' ? (
-          <form onSubmit={handleLogin}>
-            <div className="form-group">
-              <label className="form-label">Email address</label>
-              <input className="form-input" type="email" value={email} onChange={e=>setEmail(e.target.value)} required placeholder="you@school.edu"/>
+
+        {/* ── VERIFY EMAIL SCREEN ── */}
+        {tab === 'verify' ? (
+          <div style={{textAlign:'center'}}>
+            <div style={{fontSize:52,marginBottom:'1rem'}}>📧</div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:600,color:'var(--navy)',marginBottom:'.5rem'}}>Verify your email</div>
+            <div style={{fontSize:13,color:'#86857e',marginBottom:'1.5rem',lineHeight:1.7}}>
+              A verification link has been sent to<br/>
+              <strong style={{color:'var(--navy)'}}>{pendingUser?.email}</strong><br/>
+              Click the link in your email to verify your account, then come back and sign in.
             </div>
-            <div className="form-group">
-              <label className="form-label">Password</label>
-              <input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} required placeholder="••••••••"/>
+            {error && <div className="alert alert-error" style={{textAlign:'left'}}>{error}</div>}
+            {success && <div className="alert alert-success" style={{textAlign:'left'}}>{success}</div>}
+            <div style={{background:'#f0fdf8',border:'1px solid #9fe1cb',borderRadius:10,padding:'1rem',fontSize:'12.5px',color:'#0f6e56',marginBottom:'1.5rem',lineHeight:1.6,textAlign:'left'}}>
+              <strong>📌 Didn't get it?</strong> Check your spam/junk folder. Gmail users: check the Promotions tab.
             </div>
-            <button className="btn btn-primary btn-full" type="submit" disabled={loading} style={{marginTop:'.25rem'}}>
-              {loading ? <div className="spinner"/> : 'Sign in →'}
+            <button className="btn btn-ghost btn-full" onClick={resendVerification} disabled={resending} style={{marginBottom:'.6rem'}}>
+              {resending ? <div className="spinner spinner-dark"/> : '↩ Resend verification email'}
             </button>
-          </form>
+            <button className="btn btn-primary btn-full" onClick={()=>switchTab('login')}>
+              ✓ I verified my email — Sign in
+            </button>
+          </div>
+
+        /* ── FORGOT PASSWORD SCREEN ── */
+        ) : tab === 'forgot' ? (
+          <div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:600,color:'#0B1F4A',marginBottom:'.35rem'}}>Reset password</div>
+            <div style={{fontSize:13,color:'#86857e',marginBottom:'2rem'}}>Enter your email and we&apos;ll send you a reset link</div>
+            {error && <div className="alert alert-error">{error}</div>}
+            {success && <div className="alert alert-success">{success}</div>}
+            {!success && (
+              <form onSubmit={handleForgotPassword}>
+                <div className="form-group">
+                  <label className="form-label">Email address</label>
+                  <input className="form-input" type="email" value={resetEmail} onChange={e=>setResetEmail(e.target.value)} required placeholder="you@school.edu" autoFocus/>
+                </div>
+                <button className="btn btn-primary btn-full" type="submit" disabled={loading||!resetEmail.trim()} style={{marginTop:'.25rem'}}>
+                  {loading ? <div className="spinner"/> : 'Send reset link →'}
+                </button>
+              </form>
+            )}
+            <div style={{textAlign:'center',marginTop:'1rem'}}>
+              <button onClick={()=>switchTab('login')} style={{background:'none',border:'none',color:'var(--text3)',fontSize:'13px',cursor:'pointer',fontFamily:'inherit'}}>← Back to sign in</button>
+            </div>
+          </div>
+
+        /* ── SIGN IN / REGISTER ── */
         ) : (
+          <div>
+            <div style={{fontFamily:"'Playfair Display',serif",fontSize:22,fontWeight:600,color:'#0B1F4A',marginBottom:'.35rem'}}>
+              {tab==='login' ? 'Welcome back' : 'Request access'}
+            </div>
+            <div style={{fontSize:13,color:'#86857e',marginBottom:'2rem'}}>
+              {tab==='login' ? 'Sign in to the HR portal' : 'Your account will be reviewed before activation'}
+            </div>
+            <div className="login-tabs">
+              <button className={`login-tab${tab==='login'?' active':''}`} onClick={()=>switchTab('login')}>Sign In</button>
+              <button className={`login-tab${tab==='register'?' active':''}`} onClick={()=>switchTab('register')}>Register</button>
+            </div>
+            {error && <div className="alert alert-error">{error}</div>}
+            {success && <div className="alert alert-success">{success}</div>}
+            {tab === 'login' ? (
+              <form onSubmit={handleLogin}>
+                <div className="form-group">
+                  <label className="form-label">Email address</label>
+                  <input className="form-input" type="email" value={email} onChange={e=>setEmail(e.target.value)} required placeholder="you@school.edu"/>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Password</label>
+                  <input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} required placeholder="••••••••"/>
+                </div>
+                <button className="btn btn-primary btn-full" type="submit" disabled={loading} style={{marginTop:'.25rem'}}>
+                  {loading ? <div className="spinner"/> : 'Sign in →'}
+                </button>
+                <div style={{textAlign:'center',marginTop:'1rem'}}>
+                  <button type="button" onClick={()=>switchTab('forgot')} style={{background:'none',border:'none',color:'var(--teal)',fontSize:'13px',cursor:'pointer',fontFamily:'inherit',textDecoration:'underline'}}>
+                    Forgot your password?
+                  </button>
+                </div>
+              </form>
+            ) : (
           <form onSubmit={handleRegister}>
             <div className="form-group">
               <label className="form-label">Roleplay name</label>
@@ -964,6 +1094,8 @@ function LoginPage({ user, setUser, setProfile }) {
             </button>
             <div className="pending-note">Your account will be reviewed and approved by HR before you can sign in.</div>
           </form>
+        )}
+          </div>
         )}
       </div>
     </div>
@@ -1026,6 +1158,7 @@ function MainApp({ profile, setProfile }) {
     { id:'leave', label:'Leave Requests', icon:'calendar' },
     { id:'jobdesc', label:'Job Descriptions', icon:'ranks' },
     { id:'documents', label:'Documents', icon:'logs' },
+    { id:'schedule', label:'My Schedule', icon:'calendar' },
   ];
   const hrTools = isHR ? [
     { id:'roster', label:'Staff Roster', icon:'departments' },
@@ -1035,11 +1168,13 @@ function MainApp({ profile, setProfile }) {
     { id:'promotions', label:'Promotions', icon:'promotions' },
     { id:'commendations', label:'Commendations', icon:'star' },
     { id:'analytics', label:'Analytics', icon:'chart' },
+    { id:'schedulebuilder', label:'Schedule Builder', icon:'calendar' },
   ] : [];
   const adminTools = isDirector ? [
     { id:'eotm', label:'Employee of Month', icon:'star' },
     { id:'ranks', label:'Manage Ranks', icon:'ranks' },
     { id:'courses', label:'Manage Courses', icon:'attendance' },
+    { id:'bellschedule', label:'Bell Schedule', icon:'ranks' },
     { id:'departments', label:'Departments', icon:'departments' },
     { id:'pending', label:'Pending Accounts', icon:'pending' },
     { id:'createuser', label:'Create Account', icon:'plus' },
@@ -1054,6 +1189,8 @@ function MainApp({ profile, setProfile }) {
     leave: <LeaveRequests profile={profile}/>,
     documents: <Documents profile={profile}/>,
     jobdesc: <JobDescriptions/>,
+    schedule: <MySchedule profile={profile}/>,
+    schedulebuilder: <ScheduleBuilder profile={profile}/>,
     roster: <StaffRoster profile={profile}/>,
     staff: <Staff profile={profile}/>,
     employment: <EmploymentRecords profile={profile}/>,
@@ -1064,6 +1201,7 @@ function MainApp({ profile, setProfile }) {
     eotm: <EmployeeOfMonth profile={profile}/>,
     ranks: <ManageRanks profile={profile}/>,
     courses: <ManageCourses profile={profile}/>,
+    bellschedule: <ManageBellSchedule profile={profile}/>,
     departments: <ManageDepartments profile={profile}/>,
     pending: <PendingAccounts profile={profile}/>,
     createuser: <CreateUser profile={profile}/>,
@@ -1073,10 +1211,11 @@ function MainApp({ profile, setProfile }) {
   const pageTitle = {
     dashboard:'Dashboard', announcements:'Announcements', myprofile:'My Profile',
     attendance:'Attendance', leave:'Leave Requests',
-    documents:'Documents', jobdesc:'Job Descriptions', roster:'Staff Roster', staff:'Staff',
+    documents:'Documents', jobdesc:'Job Descriptions', schedule:'My Schedule',
+    schedulebuilder:'Schedule Builder',
     employment:'Employment Records', discipline:'Disciplinary Records', promotions:'Promotions & Demotions',
     commendations:'Commendations', analytics:'Analytics', eotm:'Employee of the Month',
-    ranks:'Manage Ranks', courses:'Manage Courses', departments:'Departments',
+    ranks:'Manage Ranks', courses:'Manage Courses', bellschedule:'Bell Schedule', departments:'Departments',
     pending:'Pending Accounts', createuser:'Create Account', alllogs:'Activity Logs',
   };
 
@@ -1170,6 +1309,16 @@ function MainApp({ profile, setProfile }) {
           </div>
         </div>
         <div className="content fade-in" key={page}>
+          {profile.emailWarning && (
+            <div style={{background:'#fff3cd',border:'1px solid #ffc107',borderRadius:'var(--radius)',padding:'1rem 1.25rem',marginBottom:'1.25rem',display:'flex',alignItems:'center',gap:'1rem',flexWrap:'wrap'}}>
+              <span style={{fontSize:'20px'}}>⚠️</span>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:'13.5px',color:'#856404'}}>Your email address may not be verified</div>
+                <div style={{fontSize:'12.5px',color:'#856404',marginTop:'2px'}}>Your account was registered with an email that may not be valid. Please update it in My Profile to ensure you can receive important notifications and reset your password if needed.</div>
+              </div>
+              <button className="btn btn-sm" style={{background:'#ffc107',border:'none',color:'#212529',fontWeight:600,flexShrink:0}} onClick={()=>setPage('myprofile')}>Update email →</button>
+            </div>
+          )}
           {pages[page]}
         </div>
       </div>
@@ -2664,15 +2813,185 @@ function CreateUser({ profile }) {
 }
 
 // ── Manage Courses ──
+// ══════════════════════════════════════════════════════
+// COURSE AUTO-SCHEDULER
+// Greedy CSP with backtracking:
+//   Hard constraints:
+//     1. One teacher can only teach one class per period
+//     2. Same grade can't have two different classes in the same period
+//     3. Each course gets exactly one period
+//   Soft constraints (ordering heuristic):
+//     - Most-constrained courses scheduled first (fewest available periods)
+//     - Grade distribution spread across day
+//   Grade auto-detection:
+//     - Looks for 9/10/11/12 in the course name
+//     - Falls back to type (core → all grades, elective → all grades)
+// ══════════════════════════════════════════════════════
+
+function inferGradesFromName(name) {
+  const grades = [];
+  const text = name.toLowerCase();
+  if (/\b9(th)?\b/.test(text))  grades.push('9');
+  if (/\b10(th)?\b/.test(text)) grades.push('10');
+  if (/\b11(th)?\b/.test(text)) grades.push('11');
+  if (/\b12(th)?\b/.test(text)) grades.push('12');
+  if (/freshman/.test(text))    grades.push('9');
+  if (/sophomore/.test(text))   grades.push('10');
+  if (/junior/.test(text))      grades.push('11');
+  if (/senior/.test(text))      grades.push('12');
+  if (/\bap\b|advanced/.test(text) && grades.length === 0) grades.push('11','12');
+  if (/honor/.test(text) && grades.length === 0) grades.push('10','11','12');
+  return [...new Set(grades)];
+}
+
+function autoScheduleCourses(courses, availablePeriods) {
+  // ─────────────────────────────────────────────────────────────────
+  // MODEL (matches the LHS bell schedule image):
+  //   • Each period has exactly ONE slot per grade (9/10/11/12)
+  //   • A grade's slot for a period = one course
+  //   • Same teacher can't teach two classes in the same period
+  //   • A course with grades [9] only occupies the grade-9 slot
+  //   • A course with grades [9,10] occupies BOTH the grade-9 AND grade-10 slot
+  //     in the same period (co-taught / combined class)
+  //
+  // ALGORITHM: greedy CSP with backtracking
+  //   1. Infer grades from name if not set
+  //   2. Sort by most-constrained first (single-grade courses first,
+  //      then fewest-teacher courses — they have the least flexibility)
+  //   3. For each course, find valid periods where:
+  //        - no teacher conflict
+  //        - no grade-slot already taken
+  //   4. Assign to least-loaded valid period; backtrack if stuck
+  //   5. Courses that truly can't fit are returned as conflicts
+  // ─────────────────────────────────────────────────────────────────
+
+  const ALL_GRADES = ['9','10','11','12'];
+
+  // Step 1: enrich — infer grades from name
+  const enriched = courses.map(c => {
+    let grades = (c.grades && c.grades.length > 0) ? [...c.grades] : inferGradesFromName(c.name);
+    // Single-grade name inference: "English 9" → ['9'], not ['9','10','11','12']
+    // Only fall back to all-grades if truly no indicator at all
+    if (grades.length === 0) grades = [...ALL_GRADES];
+    return { ...c, grades };
+  });
+
+  // Step 2: sort — most constrained first
+  // Most constrained = single grade (conflicts with more other single-grade courses)
+  //                  + fewer teachers (less flexibility in assignment)
+  const sorted = [...enriched].sort((a, b) => {
+    const gradeDiff = a.grades.length - b.grades.length;
+    if (gradeDiff !== 0) return gradeDiff; // single-grade first
+    return (a.teacherIds||[]).length - (b.teacherIds||[]).length; // fewer teachers first
+  });
+
+  const assigned = [];
+  const conflicts = [];
+
+  // State: immutable maps passed through recursion for clean backtracking
+  // gradeSlots[grade][period] = true  → that grade's period slot is taken
+  // teacherSlots[teacherId][period] = true → teacher busy that period
+  const initGradeSlots = () => {
+    const m = {};
+    ALL_GRADES.forEach(g => { m[g] = {}; });
+    return m;
+  };
+  const initTeacherSlots = () => ({});
+  const initPeriodLoad = () => {
+    const m = {};
+    availablePeriods.forEach(p => { m[p] = 0; });
+    return m;
+  };
+
+  function cloneGradeSlots(gs) {
+    const m = {};
+    ALL_GRADES.forEach(g => { m[g] = { ...gs[g] }; });
+    return m;
+  }
+
+  function tryAssign(idx, gradeSlots, teacherSlots, periodLoad) {
+    if (idx === sorted.length) return true;
+
+    const course = sorted[idx];
+    const teachers = course.teacherIds || [];
+    const grades = course.grades;
+
+    // Valid periods: none of this course's grades are taken AND no teacher conflict
+    const validPeriods = availablePeriods.filter(period => {
+      // Teacher conflict check
+      for (const tid of teachers) {
+        if (teacherSlots[tid] && teacherSlots[tid][period]) return false;
+      }
+      // Grade slot conflict check — ALL grades this course needs must be free
+      for (const g of grades) {
+        if (gradeSlots[g] && gradeSlots[g][period]) return false;
+      }
+      return true;
+    });
+
+    if (validPeriods.length === 0) {
+      // Truly can't schedule — record conflict, skip, keep going
+      conflicts.push(course.name);
+      return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
+    }
+
+    // Try periods in order of least load (spread the schedule evenly)
+    const ordered = [...validPeriods].sort((a, b) => (periodLoad[a]||0) - (periodLoad[b]||0));
+
+    for (const period of ordered) {
+      // Clone state for this branch
+      const newGradeSlots = cloneGradeSlots(gradeSlots);
+      const newTeacherSlots = { ...teacherSlots };
+      const newPeriodLoad = { ...periodLoad };
+
+      // Mark grade slots
+      for (const g of grades) {
+        newGradeSlots[g][period] = true;
+      }
+      // Mark teacher slots
+      for (const tid of teachers) {
+        newTeacherSlots[tid] = { ...(newTeacherSlots[tid]||{}), [period]: true };
+      }
+      newPeriodLoad[period] = (newPeriodLoad[period]||0) + 1;
+
+      assigned.push({ ...course, period });
+      if (tryAssign(idx + 1, newGradeSlots, newTeacherSlots, newPeriodLoad)) return true;
+
+      // Backtrack
+      assigned.pop();
+    }
+
+    // All periods failed — conflict
+    conflicts.push(course.name);
+    return tryAssign(idx + 1, gradeSlots, teacherSlots, periodLoad);
+  }
+
+  tryAssign(0, initGradeSlots(), initTeacherSlots(), initPeriodLoad());
+
+  // Deduplicate conflicts (course may have been pushed multiple times on backtrack)
+  const uniqueConflicts = [...new Set(conflicts)];
+  // Remove any that ended up assigned via a later branch
+  const assignedIds = new Set(assigned.map(c => c.id));
+  const finalConflicts = uniqueConflicts.filter(name => !assigned.find(c => c.name === name));
+
+  return { assigned, conflicts: finalConflicts };
+}
+
 function ManageCourses({ profile }) {
   const [courses, setCourses] = useState([]);
   const [users, setUsers] = useState([]);
   const [modal, setModal] = useState(false);
   const [editing, setEditing] = useState(null);
-  const [form, setForm] = useState({ name:'', type:'core', teacherIds:[] });
+  const [form, setForm] = useState({ name:'', type:'core', teacherIds:[], grades:[], period:'' });
   const [saving, setSaving] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [scheduleResult, setScheduleResult] = useState(null);
+  const [showResult, setShowResult] = useState(false);
+  const [bellPeriods, setBellPeriods] = useState([]);
   const dragItem = useRef(null);
   const dragOver = useRef(null);
+
+  const NON_TEACHING_RE = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
 
   useEffect(() => {
     const unsub = db.collection('courses').orderBy('sortOrder').onSnapshot(s => {
@@ -2681,11 +3000,58 @@ function ManageCourses({ profile }) {
       setCourses(docs);
     });
     db.collection('users').onSnapshot(s => setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active')));
+    // Load bell schedule for period picker
+    db.collection('settings').doc('bell_schedule').get().then(doc => {
+      const raw = (doc.exists && doc.data().periods?.length) ? doc.data().periods : BELL_SCHEDULE;
+      const teaching = raw
+        .filter(b => b.type !== 'break' && !NON_TEACHING_RE.test(b.period))
+        .map(b => b.period);
+      setBellPeriods(teaching.length > 0 ? teaching : ['1st Period','2nd Period','3rd Period','4th Period','5th Period','6th Period','7th Period']);
+    });
     return unsub;
   }, []);
 
-  const openNew = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[]}); setModal(true); };
-  const openEdit = (c) => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[]}); setModal(true); };
+  // ── Auto-schedule: run CSP then write results to Firestore ──
+  const runAutoSchedule = async () => {
+    setScheduling(true);
+    setScheduleResult(null);
+
+    // Load bell schedule from Firestore (teaching periods only)
+    const bellDoc = await db.collection('settings').doc('bell_schedule').get();
+    let bells = BELL_SCHEDULE;
+    if (bellDoc.exists && bellDoc.data().periods?.length) bells = bellDoc.data().periods;
+
+    // Exclude non-teaching periods — check both type field AND name patterns
+    // This handles bells saved from the editor which may not have a type field
+    const NON_TEACHING = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
+    const teachingPeriods = bells
+      .filter(b => b.type !== 'break')
+      .filter(b => !NON_TEACHING.test(b.period))
+      .map(b => b.period);
+
+    const result = autoScheduleCourses(courses, teachingPeriods);
+    result.bellPeriods = teachingPeriods; // pass period order to result modal
+
+    // Write assignments back to Firestore
+    const batch = db.batch();
+    for (const c of result.assigned) {
+      const inferredGrades = c.grades && c.grades.length > 0 ? c.grades : inferGradesFromName(c.name);
+      const finalGrades = inferredGrades.length > 0 ? inferredGrades : ['9','10','11','12'];
+      batch.update(db.collection('courses').doc(c.id), {
+        period: c.period,
+        grades: finalGrades,
+      });
+    }
+    await batch.commit();
+    await addLog(profile.id, profile.displayName, 'Auto-scheduled courses', `${result.assigned.length} assigned, ${result.conflicts.length} conflicts`);
+
+    setScheduleResult(result);
+    setShowResult(true);
+    setScheduling(false);
+  };
+
+  const openNew = () => { setEditing(null); setForm({name:'',type:'core',teacherIds:[],grades:[],period:''}); setModal(true); };
+  const openEdit = (c) => { setEditing(c); setForm({name:c.name,type:c.type||'core',teacherIds:c.teacherIds||[],grades:c.grades||[],period:c.period||''}); setModal(true); };
 
   const toggleTeacher = (uid) => {
     setForm(f => ({
@@ -2735,9 +3101,114 @@ function ManageCourses({ profile }) {
 
   return (
     <div>
-      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:'1rem'}}>
-        <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={13}/> New Course</button>
+      {/* Toolbar */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'1rem',flexWrap:'wrap',gap:'.6rem'}}>
+        <div>
+          <div style={{fontFamily:"'Playfair Display',serif",fontSize:'15px',fontWeight:600,color:'var(--navy)'}}>Course Management</div>
+          <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'1px'}}>{courses.length} total courses · Auto-scheduler assigns periods & grades with no conflicts</div>
+        </div>
+        <div style={{display:'flex',gap:'.5rem'}}>
+          <button
+            className="btn btn-sm"
+            style={{background:'linear-gradient(135deg,#1D9E75,#0f6e56)',color:'white',border:'none',fontWeight:600}}
+            onClick={runAutoSchedule}
+            disabled={scheduling||courses.length===0}
+            title="Automatically assign periods and grade levels to all courses with no conflicts"
+          >
+            {scheduling ? <><div className="spinner" style={{width:12,height:12,marginRight:4}}/> Scheduling...</> : '⚡ Auto-schedule all courses'}
+          </button>
+          <button className="btn btn-primary" onClick={openNew}><Icon name="plus" size={13}/> New Course</button>
+        </div>
       </div>
+
+      {/* Auto-schedule result modal */}
+      {showResult && scheduleResult && (
+        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setShowResult(false)}>
+          <div className="modal" style={{maxWidth:720}}>
+            <div className="modal-header">
+              <div>
+                <span className="modal-title">⚡ Auto-schedule complete</span>
+                <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'2px'}}>
+                  {scheduleResult.assigned.length} courses assigned · {scheduleResult.conflicts.length} conflict{scheduleResult.conflicts.length!==1?'s':''}
+                </div>
+              </div>
+              <button className="modal-close" onClick={()=>setShowResult(false)}><Icon name="x" size={14}/></button>
+            </div>
+            <div className="modal-body" style={{padding:0}}>
+              {/* Bell schedule grid — periods × grades */}
+              <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',borderCollapse:'collapse',fontSize:'12px'}}>
+                  <thead>
+                    <tr style={{background:'var(--navy)'}}>
+                      <th style={{padding:'.6rem .75rem',color:'white',textAlign:'left',fontWeight:600,width:90}}>Period</th>
+                      {['9','10','11','12'].map(g=>(
+                        <th key={g} style={{padding:'.6rem .75rem',color:'white',textAlign:'center',fontWeight:600}}>
+                          <div style={{fontSize:'13px'}}>Grade {g}</div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      // Build lookup: period → { grade → course }
+                      const grid = {};
+                      scheduleResult.assigned.forEach(c => {
+                        if (!grid[c.period]) grid[c.period] = {};
+                        (c.grades||[]).forEach(g => { grid[c.period][g] = c; });
+                      });
+                      // Get periods in bell schedule order
+                      const bellDoc = scheduleResult.bellPeriods || [];
+                      const periods = bellDoc.length > 0
+                        ? bellDoc
+                        : [...new Set(scheduleResult.assigned.map(c=>c.period))].sort();
+                      return periods.map((period, i) => (
+                        <tr key={period} style={{background:i%2===0?'var(--white)':'var(--bg)',borderBottom:'1px solid var(--border)'}}>
+                          <td style={{padding:'.5rem .75rem',fontWeight:600,color:'var(--navy)',fontSize:'11.5px',borderRight:'2px solid var(--border)'}}>{period}</td>
+                          {['9','10','11','12'].map(g => {
+                            const c = grid[period]?.[g];
+                            return (
+                              <td key={g} style={{padding:'.4rem .5rem',textAlign:'center',verticalAlign:'middle'}}>
+                                {c ? (
+                                  <div style={{
+                                    background:c.type==='core'?'#ebf0ff':'#f0ebff',
+                                    border:`1px solid ${c.type==='core'?'#c5d0f5':'#d5c8f5'}`,
+                                    borderRadius:6,padding:'.3rem .5rem',fontSize:'11px',lineHeight:1.3,
+                                  }}>
+                                    <div style={{fontWeight:600,color:'var(--navy)'}}>{c.name}</div>
+                                  </div>
+                                ) : (
+                                  <span style={{color:'#d1d5db',fontSize:'10px'}}>—</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Conflicts */}
+              {scheduleResult.conflicts.length > 0 && (
+                <div style={{margin:'1rem',background:'#fff5f5',border:'1px solid #fca5a5',borderRadius:10,padding:'1rem'}}>
+                  <div style={{fontSize:'12px',fontWeight:700,color:'#c0392b',marginBottom:'.5rem'}}>⚠️ Couldn't auto-assign — assign manually:</div>
+                  {scheduleResult.conflicts.map((name,i)=>(
+                    <div key={i} style={{fontSize:'12.5px',color:'#c0392b',padding:'2px 0'}}>• {name}</div>
+                  ))}
+                  <div style={{fontSize:'11px',color:'#c0392b',marginTop:'.5rem',opacity:.8}}>
+                    These courses couldn't fit without creating a conflict. Common causes: a teacher already has every period filled, or all of a grade's period slots are taken. Assign their periods manually in the course editor.
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-ghost" onClick={()=>setShowResult(false)}>Close</button>
+              <button className="btn btn-primary" onClick={()=>setShowResult(false)}>Done ✓</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {[['Core Courses', core], ['Electives', elective]].map(([label, list]) => (
         <div key={label} className="panel" style={{marginBottom:'1rem'}}>
@@ -2747,10 +3218,10 @@ function ManageCourses({ profile }) {
           </div>
           <div className="table-wrap">
             <table>
-              <thead><tr><th style={{width:32}}></th><th>Course name</th><th>Teachers assigned</th><th/></tr></thead>
+              <thead><tr><th style={{width:32}}></th><th>Course name</th><th>Period</th><th>Grades</th><th>Teachers</th><th/></tr></thead>
               <tbody>
                 {list.length===0
-                  ? <tr><td colSpan="4"><div className="empty"><div className="empty-text">No {label.toLowerCase()} yet</div></div></td></tr>
+                  ? <tr><td colSpan="6"><div className="empty"><div className="empty-text">No {label.toLowerCase()} yet</div></div></td></tr>
                   : list.map((c, idx) => (
                     <tr key={c.id} className="drag-row" draggable
                       onDragStart={e=>onDragStart(e, courses.indexOf(c))}
@@ -2761,6 +3232,13 @@ function ManageCourses({ profile }) {
                     >
                       <td><span className="drag-handle">⠿</span></td>
                       <td style={{fontWeight:500}}>{c.name}</td>
+                      <td style={{fontSize:'12px',color:'var(--text2)'}}>{c.period||<span style={{color:'var(--text3)'}}>—</span>}</td>
+                      <td>
+                        {(c.grades||[]).length>0
+                          ? (c.grades||[]).sort().map(g=><span key={g} className="badge badge-navy" style={{fontSize:'10px',marginRight:2}}>Gr {g}</span>)
+                          : <span style={{color:'var(--text3)',fontSize:'12px'}}>—</span>
+                        }
+                      </td>
                       <td>
                         {(c.teacherIds||[]).length === 0
                           ? <span style={{color:'var(--text3)',fontSize:'12px'}}>No teacher assigned</span>
@@ -2795,15 +3273,37 @@ function ManageCourses({ profile }) {
                 <label className="form-label">Course name</label>
                 <input className="form-input" value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. English 9, Photography"/>
               </div>
-              <div className="form-group">
-                <label className="form-label">Type</label>
-                <select className="form-input form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
-                  <option value="core">Core course</option>
-                  <option value="elective">Elective</option>
-                </select>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'.75rem'}}>
+                <div className="form-group">
+                  <label className="form-label">Type</label>
+                  <select className="form-input form-select" value={form.type} onChange={e=>setForm(f=>({...f,type:e.target.value}))}>
+                    <option value="core">Core course</option>
+                    <option value="elective">Elective</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Period</label>
+                  <select className="form-input form-select" value={form.period} onChange={e=>setForm(f=>({...f,period:e.target.value}))}>
+                    <option value="">— Select period —</option>
+                    {bellPeriods.map(p=>(
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div className="form-group">
-                <label className="form-label">Assign teachers (select all that apply)</label>
+                <label className="form-label">Grade levels</label>
+                <div style={{display:'flex',gap:'.5rem'}}>
+                  {['9','10','11','12'].map(g=>(
+                    <label key={g} style={{display:'flex',alignItems:'center',gap:'.3rem',padding:'.4rem .75rem',border:`1.5px solid ${(form.grades||[]).includes(g)?'var(--navy)':'var(--border)'}`,borderRadius:8,cursor:'pointer',background:(form.grades||[]).includes(g)?'var(--navy)':'transparent',transition:'all .12s'}}>
+                      <input type="checkbox" style={{display:'none'}} checked={(form.grades||[]).includes(g)} onChange={()=>setForm(f=>({...f,grades:(f.grades||[]).includes(g)?f.grades.filter(x=>x!==g):[...(f.grades||[]),g]}))}/>
+                      <span style={{fontSize:'13px',fontWeight:600,color:(form.grades||[]).includes(g)?'white':'var(--text2)'}}>Grade {g}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="form-group">
+                <label className="form-label">Assign teachers</label>
                 <div style={{maxHeight:200,overflowY:'auto',border:'1px solid var(--border)',borderRadius:8,padding:'.5rem'}}>
                   {users.length===0
                     ? <div style={{color:'var(--text3)',fontSize:'13px',padding:'.25rem'}}>No active staff yet</div>
@@ -4176,6 +4676,880 @@ function JobDescriptions() {
             </div>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════
+// SCHEDULE SYSTEM
+// Bell schedule + individual staff schedules
+// Drag-and-drop builder for HR
+// ════════════════════════════════════════════════════════
+
+// LHS Bell Schedule — real time → game time mapping
+const BELL_SCHEDULE = [
+  { period:'1st Period',  realStart:'08:00', realEnd:'08:50', gameStart:'8:00 AM',  gameEnd:'9:15 AM',  color:'#3b82f6' },
+  { period:'2nd Period',  realStart:'08:54', realEnd:'09:44', gameStart:'9:20 AM',  gameEnd:'10:35 AM', color:'#8b5cf6' },
+  { period:'3rd Period',  realStart:'09:48', realEnd:'10:38', gameStart:'10:40 AM', gameEnd:'11:55 AM', color:'#ec4899' },
+  { period:'4th Period',  realStart:'10:42', realEnd:'11:32', gameStart:'12:00 PM', gameEnd:'1:15 PM',  color:'#f59e0b' },
+  { period:'Lunch A',     realStart:'11:32', realEnd:'12:02', gameStart:'1:15 PM',  gameEnd:'1:45 PM',  color:'#10b981', type:'break' },
+  { period:'5th Period',  realStart:'12:06', realEnd:'12:56', gameStart:'1:50 PM',  gameEnd:'3:05 PM',  color:'#3b82f6' },
+  { period:'Lunch B',     realStart:'12:56', realEnd:'13:26', gameStart:'3:05 PM',  gameEnd:'3:35 PM',  color:'#10b981', type:'break' },
+  { period:'6th Period',  realStart:'13:30', realEnd:'14:20', gameStart:'3:40 PM',  gameEnd:'4:55 PM',  color:'#8b5cf6' },
+  { period:'7th Period',  realStart:'14:24', realEnd:'15:14', gameStart:'5:00 PM',  gameEnd:'6:15 PM',  color:'#ec4899' },
+  { period:'After School',realStart:'15:14', realEnd:'16:00', gameStart:'6:15 PM',  gameEnd:'7:00 PM',  color:'#6b7280', type:'break' },
+];
+
+// Preset schedule templates
+const SCHEDULE_TEMPLATES = {
+  core_instructor: {
+    name: 'Core Instructor',
+    description: 'Teaches 5 classes per day with one planning period',
+    blocks: [
+      { id:'t1', period:'1st Period',  type:'teaching',   label:'Teaching Class',   color:'#3b82f6' },
+      { id:'t2', period:'2nd Period',  type:'teaching',   label:'Teaching Class',   color:'#3b82f6' },
+      { id:'t3', period:'3rd Period',  type:'planning',   label:'Planning Period',  color:'#10b981' },
+      { id:'t4', period:'4th Period',  type:'teaching',   label:'Teaching Class',   color:'#3b82f6' },
+      { id:'t5', period:'Lunch A',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'t6', period:'5th Period',  type:'teaching',   label:'Teaching Class',   color:'#3b82f6' },
+      { id:'t7', period:'Lunch B',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'t8', period:'6th Period',  type:'teaching',   label:'Teaching Class',   color:'#3b82f6' },
+      { id:'t9', period:'7th Period',  type:'duty',       label:'Hall Duty',        color:'#6b7280' },
+    ]
+  },
+  elective_instructor: {
+    name: 'Elective Instructor',
+    description: 'Teaches elective courses with planning and duty',
+    blocks: [
+      { id:'e1', period:'1st Period',  type:'planning',   label:'Planning Period',  color:'#10b981' },
+      { id:'e2', period:'2nd Period',  type:'teaching',   label:'Elective Class',   color:'#8b5cf6' },
+      { id:'e3', period:'3rd Period',  type:'teaching',   label:'Elective Class',   color:'#8b5cf6' },
+      { id:'e4', period:'4th Period',  type:'teaching',   label:'Elective Class',   color:'#8b5cf6' },
+      { id:'e5', period:'Lunch A',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'e6', period:'5th Period',  type:'teaching',   label:'Elective Class',   color:'#8b5cf6' },
+      { id:'e7', period:'Lunch B',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'e8', period:'6th Period',  type:'teaching',   label:'Elective Class',   color:'#8b5cf6' },
+      { id:'e9', period:'7th Period',  type:'duty',       label:'Hall Duty',        color:'#6b7280' },
+    ]
+  },
+  office_staff: {
+    name: 'Office Staff',
+    description: 'Full day in office with lunch break',
+    blocks: [
+      { id:'o1', period:'1st Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+      { id:'o2', period:'2nd Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+      { id:'o3', period:'3rd Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+      { id:'o4', period:'4th Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+      { id:'o5', period:'Lunch A',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'o6', period:'5th Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+      { id:'o7', period:'Lunch B',     type:'duty',       label:'Coverage Duty',    color:'#6b7280' },
+      { id:'o8', period:'6th Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+      { id:'o9', period:'7th Period',  type:'office',     label:'Office Duties',    color:'#1D9E75' },
+    ]
+  },
+  administration: {
+    name: 'Administration',
+    description: 'Administrative duties throughout the day',
+    blocks: [
+      { id:'a1', period:'1st Period',  type:'admin',      label:'Morning Duties',   color:'#0B1F4A' },
+      { id:'a2', period:'2nd Period',  type:'admin',      label:'Administrative',   color:'#0B1F4A' },
+      { id:'a3', period:'3rd Period',  type:'meeting',    label:'Staff Meetings',   color:'#ec4899' },
+      { id:'a4', period:'4th Period',  type:'admin',      label:'Administrative',   color:'#0B1F4A' },
+      { id:'a5', period:'Lunch A',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'a6', period:'5th Period',  type:'admin',      label:'Administrative',   color:'#0B1F4A' },
+      { id:'a7', period:'Lunch B',     type:'admin',      label:'Administrative',   color:'#0B1F4A' },
+      { id:'a8', period:'6th Period',  type:'observation',label:'Observation',      color:'#8b5cf6' },
+      { id:'a9', period:'7th Period',  type:'admin',      label:'End of Day Admin', color:'#0B1F4A' },
+    ]
+  },
+  guidance: {
+    name: 'Guidance Counselor',
+    description: 'Student meetings and counseling sessions',
+    blocks: [
+      { id:'g1', period:'1st Period',  type:'counseling', label:'Student Sessions', color:'#3b82f6' },
+      { id:'g2', period:'2nd Period',  type:'counseling', label:'Student Sessions', color:'#3b82f6' },
+      { id:'g3', period:'3rd Period',  type:'planning',   label:'Planning & Admin', color:'#10b981' },
+      { id:'g4', period:'4th Period',  type:'counseling', label:'Student Sessions', color:'#3b82f6' },
+      { id:'g5', period:'Lunch A',     type:'lunch',      label:'Lunch',            color:'#f59e0b' },
+      { id:'g6', period:'5th Period',  type:'counseling', label:'Student Sessions', color:'#3b82f6' },
+      { id:'g7', period:'Lunch B',     type:'counseling', label:'Walk-Ins',         color:'#3b82f6' },
+      { id:'g8', period:'6th Period',  type:'meeting',    label:'Team Meetings',    color:'#ec4899' },
+      { id:'g9', period:'7th Period',  type:'planning',   label:'Case Notes',       color:'#10b981' },
+    ]
+  },
+  sro: {
+    name: 'School Resource Officer',
+    description: 'Campus security and patrol schedule',
+    blocks: [
+      { id:'s1', period:'1st Period',  type:'patrol',     label:'Morning Patrol',   color:'#1a3470' },
+      { id:'s2', period:'2nd Period',  type:'patrol',     label:'Campus Patrol',    color:'#1a3470' },
+      { id:'s3', period:'3rd Period',  type:'duty',       label:'Hall Monitor',     color:'#6b7280' },
+      { id:'s4', period:'4th Period',  type:'patrol',     label:'Campus Patrol',    color:'#1a3470' },
+      { id:'s5', period:'Lunch A',     type:'duty',       label:'Lunch Monitor',    color:'#6b7280' },
+      { id:'s6', period:'5th Period',  type:'patrol',     label:'Campus Patrol',    color:'#1a3470' },
+      { id:'s7', period:'Lunch B',     type:'duty',       label:'Lunch Monitor',    color:'#6b7280' },
+      { id:'s8', period:'6th Period',  type:'patrol',     label:'Campus Patrol',    color:'#1a3470' },
+      { id:'s9', period:'7th Period',  type:'patrol',     label:'Dismissal Patrol', color:'#1a3470' },
+    ]
+  },
+};
+
+const BLOCK_TYPES = [
+  { type:'teaching',   label:'Teaching',    color:'#3b82f6', icon:'✏️' },
+  { type:'planning',   label:'Planning',    color:'#10b981', icon:'📋' },
+  { type:'lunch',      label:'Lunch',       color:'#f59e0b', icon:'🍽️' },
+  { type:'office',     label:'Office',      color:'#1D9E75', icon:'🗂️' },
+  { type:'admin',      label:'Admin',       color:'#0B1F4A', icon:'⚙️' },
+  { type:'meeting',    label:'Meeting',     color:'#ec4899', icon:'👥' },
+  { type:'duty',       label:'Duty',        color:'#6b7280', icon:'👁️' },
+  { type:'counseling', label:'Counseling',  color:'#3b82f6', icon:'💬' },
+  { type:'patrol',     label:'Patrol',      color:'#1a3470', icon:'🛡️' },
+  { type:'observation',label:'Observation', color:'#8b5cf6', icon:'🔍' },
+  { type:'free',       label:'Free',        color:'#d1d5db', icon:'⬜' },
+];
+
+// ── My Schedule (all staff view) ──
+function MySchedule({ profile }) {
+  const [schedule, setSchedule] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [courses, setCourses] = useState([]);
+  const [bellSchedule, setBellSchedule] = useState(BELL_SCHEDULE);
+
+  useEffect(() => {
+    db.collection('schedules').doc(profile.id).get().then(doc => {
+      if (doc.exists) setSchedule(doc.data());
+      setLoading(false);
+    });
+    db.collection('courses').get().then(s => {
+      setCourses(s.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    // Load live bell schedule from Firestore (falls back to hardcoded if not set)
+    db.collection('settings').doc('bell_schedule').get().then(doc => {
+      if (doc.exists && doc.data().periods?.length) setBellSchedule(doc.data().periods);
+    });
+  }, []);
+
+  const myCourses = courses.filter(c=>(c.teacherIds||[]).includes(profile.id));
+
+  if (loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:'4rem'}}><div className="spinner spinner-dark"/></div>;
+
+  return (
+    <div>
+      {/* Bell schedule */}
+      <div style={{background:'linear-gradient(135deg,#0B1F4A,#0a2a1e)',borderRadius:'var(--radius)',padding:'1.25rem 1.5rem',marginBottom:'1.5rem'}}>
+        <div style={{color:'white',fontFamily:"'Playfair Display',serif",fontSize:'16px',fontWeight:600,marginBottom:'.25rem'}}>🔔 Bell Schedule</div>
+        <div style={{color:'rgba(255,255,255,.5)',fontSize:'12px',marginBottom:'1rem'}}>Real time → In-game time</div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:'.5rem'}}>
+          {bellSchedule.map(b=>(
+            <div key={b.period} style={{background:'rgba(255,255,255,.06)',borderRadius:8,padding:'.5rem .75rem',display:'flex',alignItems:'center',gap:'.6rem',border:`1px solid ${b.color||'#ffffff33'}`}}>
+              <div style={{width:4,alignSelf:'stretch',borderRadius:2,background:b.color||'#888',flexShrink:0}}/>
+              <div>
+                <div style={{fontSize:'11.5px',fontWeight:600,color:'white'}}>{b.period}</div>
+                <div style={{fontSize:'10.5px',color:'rgba(255,255,255,.5)',marginTop:'1px'}}>{b.realStart}–{b.realEnd} real · {b.gameStart}–{b.gameEnd} in-game</div>
+                {/* Show courses for this period if any */}
+                {courses.filter(c=>c.period===b.period && (c.teacherIds||[]).includes(profile.id)).map(c=>(
+                  <div key={c.id} style={{fontSize:'10px',color:'rgba(29,158,117,.9)',marginTop:'2px'}}>📚 {c.name}{(c.grades||[]).length>0?` · Gr ${c.grades.join('/')}`:''}  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* My courses */}
+      {myCourses.length > 0 && (
+        <div className="panel" style={{marginBottom:'1.25rem'}}>
+          <div className="panel-header">
+            <div><div className="panel-title">My Classes</div><div className="panel-subtitle">Courses you are assigned to teach</div></div>
+            <span className="badge badge-teal">{myCourses.length} course{myCourses.length!==1?'s':''}</span>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:'1rem',padding:'1.25rem'}}>
+            {myCourses.map(c=>(
+              <div key={c.id} style={{
+                background:c.type==='core'?'linear-gradient(135deg,#f0f4ff,#e8eeff)':'linear-gradient(135deg,#f5f0ff,#ede8ff)',
+                border:`1px solid ${c.type==='core'?'#c5d0f5':'#d5c8f5'}`,
+                borderRadius:'var(--radius)',padding:'1rem 1.25rem',
+              }}>
+                <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:'.5rem',marginBottom:'.5rem'}}>
+                  <span style={{fontSize:'20px'}}>{c.type==='core'?'✏️':'🎨'}</span>
+                  <div style={{display:'flex',gap:'.25rem',flexWrap:'wrap',justifyContent:'flex-end'}}>
+                    {(c.grades||[]).sort().map(g=><span key={g} className="badge badge-navy" style={{fontSize:'10px'}}>Gr {g}</span>)}
+                    {c.period && <span className="badge badge-silver" style={{fontSize:'10px'}}>{c.period}</span>}
+                  </div>
+                </div>
+                <div style={{fontFamily:"'Playfair Display',serif",fontWeight:600,fontSize:'15px',color:'var(--navy)',lineHeight:1.3}}>{c.name}</div>
+                <div style={{fontSize:'11px',color:'var(--text3)',marginTop:'.25rem',textTransform:'capitalize'}}>{c.type} course</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Personal schedule */}
+      {!schedule ? (
+        <div className="panel">
+          <div className="empty"><span className="empty-icon">📅</span><div className="empty-text">No schedule assigned yet</div><div className="empty-sub">Your HR team will assign your schedule soon</div></div>
+        </div>
+      ) : (
+        <div>
+          <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'1rem',flexWrap:'wrap',gap:'.5rem'}}>
+            <div>
+              <div style={{fontFamily:"'Playfair Display',serif",fontSize:'18px',fontWeight:600,color:'var(--navy)'}}>{schedule.name||'My Daily Schedule'}</div>
+              {schedule.notes && <div style={{fontSize:'12.5px',color:'var(--text3)',marginTop:'2px'}}>{schedule.notes}</div>}
+            </div>
+            {schedule.updatedAt && <div style={{fontSize:'11px',color:'var(--text3)'}}>Last updated {fmtDate(schedule.updatedAt)}</div>}
+          </div>
+          <ScheduleView blocks={schedule.blocks||[]} courses={courses} userId={profile.id} bellSchedule={bellSchedule}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Schedule View (read-only grid) ──
+function ScheduleView({ blocks, courses, userId, bellSchedule }) {
+  const bells = bellSchedule || BELL_SCHEDULE;
+  return (
+    <div style={{display:'flex',flexDirection:'column',gap:'.4rem'}}>
+      {bells.map(bell => {
+        const block = blocks.find(b=>b.period===bell.period);
+        const course = block?.courseId ? courses.find(c=>c.id===block.courseId) : null;
+        // Auto-match by period — instructors see their actual course
+        const autoCourse = !course && block?.type==='teaching'
+          ? courses.find(c=>c.period===bell.period && (c.teacherIds||[]).includes(userId))
+          : null;
+        const displayCourse = course || autoCourse;
+        const bt = BLOCK_TYPES.find(t=>t.type===(block?.type||'free'));
+        return (
+          <div key={bell.period} style={{
+            display:'grid',gridTemplateColumns:'150px 1fr 180px',
+            background:'var(--white)',border:'1px solid var(--border)',
+            borderLeft:`4px solid ${block?(bt?.color||bell.color||'#888'):'#e5e7eb'}`,
+            borderRadius:'var(--radius)',overflow:'hidden',
+            opacity: block ? 1 : 0.5,
+          }}>
+            <div style={{padding:'.6rem .85rem',borderRight:'1px solid var(--border)',background:bell.type==='break'?'#f9fafb':'var(--white)'}}>
+              <div style={{fontSize:'12px',fontWeight:600,color:'var(--navy)'}}>{bell.period}</div>
+              <div style={{fontSize:'10px',color:'var(--text3)',marginTop:'2px'}}>⏰ {bell.realStart}–{bell.realEnd}</div>
+              <div style={{fontSize:'10px',color:'var(--text3)'}}>🎮 {bell.gameStart}–{bell.gameEnd}</div>
+            </div>
+            <div style={{padding:'.6rem 1rem',display:'flex',alignItems:'center',gap:'.6rem'}}>
+              {block ? (
+                <>
+                  <span style={{fontSize:'16px'}}>{bt?.icon||'📌'}</span>
+                  <div>
+                    <div style={{fontSize:'13px',fontWeight:600,color:'var(--navy)'}}>
+                      {displayCourse ? displayCourse.name : (block.label||bt?.label||'Activity')}
+                    </div>
+                    {displayCourse && (
+                      <div style={{display:'flex',gap:'.3rem',marginTop:'2px',flexWrap:'wrap'}}>
+                        {(displayCourse.grades||[]).sort().map(g=>(
+                          <span key={g} style={{fontSize:'10px',fontWeight:600,padding:'1px 6px',borderRadius:10,background:'#e8eeff',color:'#1a3470'}}>Grade {g}</span>
+                        ))}
+                        <span style={{fontSize:'10px',color:'var(--text3)',textTransform:'capitalize'}}>{displayCourse.type}</span>
+                      </div>
+                    )}
+                    {!displayCourse && block.notes && <div style={{fontSize:'11px',color:'var(--text3)',marginTop:'1px',fontStyle:'italic'}}>{block.notes}</div>}
+                  </div>
+                </>
+              ) : (
+                <span style={{fontSize:'12px',color:'var(--text3)'}}>— Unassigned —</span>
+              )}
+            </div>
+            <div style={{padding:'.6rem .85rem',display:'flex',alignItems:'center',justifyContent:'flex-end',borderLeft:'1px solid var(--border)'}}>
+              {block && <span style={{fontSize:'11px',fontWeight:600,padding:'3px 10px',borderRadius:20,background:`${bt?.color||'#888'}18`,color:bt?.color||'#888',border:`1px solid ${bt?.color||'#888'}33`}}>{bt?.label||block.type}</span>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Schedule Builder (HR only, drag-and-drop) ──
+function ScheduleBuilder({ profile }) {
+  const [users, setUsers]         = useState([]);
+  const [ranks, setRanks]         = useState([]);
+  const [courses, setCourses]     = useState([]);
+  const [bellSchedule, setBellSchedule] = useState(BELL_SCHEDULE);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [blocks, setBlocks]       = useState({});
+  const [scheduleName, setScheduleName] = useState('Daily Schedule');
+  const [scheduleNotes, setScheduleNotes] = useState('');
+  const [saving, setSaving]       = useState(false);
+  const [saved, setSaved]         = useState(false);
+  const [dragItem, setDragItem]   = useState(null);
+  const [dragOver, setDragOver]   = useState(null);
+  const [search, setSearch]       = useState('');
+  const [autoBuilding, setAutoBuilding] = useState(false);
+
+  // Load everything — including live bell schedule from Firestore
+  useEffect(() => {
+    const unsubUsers = db.collection('users').onSnapshot(s => {
+      setUsers(s.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.status==='active'));
+    });
+    db.collection('ranks').get().then(s => {
+      const docs = s.docs.map(d=>({id:d.id,...d.data()}));
+      docs.sort((a,b)=>(a.sortOrder??a.tier??0)-(b.sortOrder??b.tier??0));
+      setRanks(docs);
+    });
+    // Live courses — react to changes
+    const unsubCourses = db.collection('courses').onSnapshot(s => {
+      setCourses(s.docs.map(d=>({id:d.id,...d.data()})));
+    });
+    // Live bell schedule from Firestore
+    const unsubBell = db.collection('settings').doc('bell_schedule').onSnapshot(doc => {
+      if (doc.exists && doc.data().periods?.length) {
+        setBellSchedule(doc.data().periods);
+      } else {
+        setBellSchedule(BELL_SCHEDULE);
+      }
+    });
+    return () => { unsubUsers(); unsubCourses(); unsubBell(); };
+  }, []);
+
+  const loadUserSchedule = async (user) => {
+    setSelectedUser(user);
+    const doc = await db.collection('schedules').doc(user.id).get();
+    if (doc.exists) {
+      const data = doc.data();
+      const map = {};
+      (data.blocks||[]).forEach(b => { map[b.period] = b; });
+      setBlocks(map);
+      setScheduleName(data.name || 'Daily Schedule');
+      setScheduleNotes(data.notes || '');
+    } else {
+      setBlocks({});
+      setScheduleName('Daily Schedule');
+      setScheduleNotes('');
+    }
+    setSaved(false);
+  };
+
+  // ── AUTO-BUILD SCHEDULE ──
+  // Builds a full schedule from this user's assigned courses + sensible defaults
+  const autoBuildSchedule = () => {
+    if (!selectedUser) return;
+    setAutoBuilding(true);
+
+    const userCourses = courses.filter(c => (c.teacherIds||[]).includes(selectedUser.id));
+    const isInstructor = userCourses.length > 0;
+
+    const NON_TEACHING_RE = /homeroom|lunch|after\s*school|break|passing|recess|advisory|study\s*hall/i;
+    const map = {};
+
+    bellSchedule.forEach(bell => {
+      const isBreak = bell.type === 'break';
+      const isLunch = bell.period.toLowerCase().includes('lunch');
+      const isHomeroom = bell.period.toLowerCase().includes('homeroom');
+      const isAfterSchool = bell.period.toLowerCase().includes('after');
+      const isNonTeaching = isBreak || NON_TEACHING_RE.test(bell.period);
+
+      if (isNonTeaching) {
+        map[bell.period] = {
+          period: bell.period,
+          type: isLunch ? 'lunch' : isHomeroom ? 'duty' : 'free',
+          label: isLunch ? 'Lunch' : isHomeroom ? 'Homeroom' : isAfterSchool ? 'After School' : bell.period,
+          color: isLunch ? '#f59e0b' : isHomeroom ? '#6b7280' : '#d1d5db',
+          notes: '',
+          courseId: '',
+        };
+        return;
+      }
+
+      if (isInstructor) {
+        // Find a course assigned to this period
+        const course = userCourses.find(c => c.period === bell.period);
+        if (course) {
+          map[bell.period] = {
+            period: bell.period,
+            type: 'teaching',
+            label: course.name,
+            color: '#3b82f6',
+            notes: (course.grades||[]).length > 0 ? `Grade ${course.grades.sort().join('/')}` : '',
+            courseId: course.id,
+          };
+        } else {
+          // No course this period — planning
+          map[bell.period] = {
+            period: bell.period,
+            type: 'planning',
+            label: 'Planning Period',
+            color: '#10b981',
+            notes: '',
+            courseId: '',
+          };
+        }
+      } else {
+        // Non-instructor — use rank-based default
+        const rankName = (selectedUser.rankName||'').toLowerCase();
+        let type = 'office', label = 'Office Duties', color = '#1D9E75';
+        if (rankName.includes('principal') || rankName.includes('dean') || rankName.includes('director') || rankName.includes('admin')) {
+          type = 'admin'; label = 'Administrative'; color = '#0B1F4A';
+        } else if (rankName.includes('counselor')) {
+          type = 'counseling'; label = 'Student Sessions'; color = '#3b82f6';
+        } else if (rankName.includes('officer') || rankName.includes('sro')) {
+          type = 'patrol'; label = 'Campus Patrol'; color = '#1a3470';
+        }
+        map[bell.period] = { period: bell.period, type, label, color, notes: '', courseId: '' };
+      }
+    });
+
+    setBlocks(map);
+    const courseSummary = userCourses.length > 0 ? `${userCourses.length} course${userCourses.length!==1?'s':''}` : selectedUser.rankName||'Staff';
+    setScheduleName(`${selectedUser.rpName||selectedUser.displayName} — Daily Schedule`);
+    setScheduleNotes(isInstructor ? `Auto-generated · ${courseSummary} assigned` : 'Auto-generated from role');
+    setAutoBuilding(false);
+    setSaved(false);
+  };
+
+  const applyTemplate = (templateKey) => {
+    const tpl = SCHEDULE_TEMPLATES[templateKey];
+    if (!tpl) return;
+    const map = {};
+    tpl.blocks.forEach(b => { map[b.period] = {...b}; });
+    setBlocks(map);
+    setScheduleName(tpl.name + ' Schedule');
+    setSaved(false);
+  };
+
+  // ── Drag handlers ──
+  const onDragStartPalette = (blockType) => setDragItem({ source:'palette', blockType });
+  const onDragStartBlock   = (period)    => setDragItem({ source:'block', period });
+  const onDragOver         = (e, period) => { e.preventDefault(); setDragOver(period); };
+
+  const onDrop = (e, targetPeriod) => {
+    e.preventDefault();
+    setDragOver(null);
+    if (!dragItem) return;
+    if (dragItem.source === 'palette') {
+      const bt = BLOCK_TYPES.find(t => t.type === dragItem.blockType);
+      setBlocks(b => ({...b, [targetPeriod]: {
+        period: targetPeriod, type: dragItem.blockType,
+        label: bt?.label || dragItem.blockType, color: bt?.color || '#888',
+        notes: '', courseId: '',
+      }}));
+    } else {
+      const moving = blocks[dragItem.period];
+      if (!moving) return;
+      setBlocks(b => {
+        const next = {...b};
+        delete next[dragItem.period];
+        next[targetPeriod] = {...moving, period: targetPeriod};
+        return next;
+      });
+    }
+    setDragItem(null);
+    setSaved(false);
+  };
+
+  const onDropTrash = (e) => {
+    e.preventDefault();
+    if (dragItem?.source === 'block') {
+      setBlocks(b => { const next={...b}; delete next[dragItem.period]; return next; });
+    }
+    setDragItem(null); setDragOver(null);
+  };
+
+  const saveSchedule = async () => {
+    if (!selectedUser) return;
+    setSaving(true);
+    const blockArr = Object.values(blocks);
+    await db.collection('schedules').doc(selectedUser.id).set({
+      userId: selectedUser.id,
+      userName: selectedUser.displayName,
+      name: scheduleName,
+      notes: scheduleNotes,
+      blocks: blockArr,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      updatedBy: profile.displayName,
+    });
+    await addLog(profile.id, profile.displayName, 'Updated schedule', selectedUser.displayName);
+    setSaving(false); setSaved(true);
+    setTimeout(() => setSaved(false), 3000);
+  };
+
+  const filteredUsers = users
+    .filter(u => (u.displayName||'').toLowerCase().includes(search.toLowerCase()) || (u.rpName||'').toLowerCase().includes(search.toLowerCase()))
+    .sort((a,b) => {
+      const aR=ranks.find(r=>r.id===a.rankId), bR=ranks.find(r=>r.id===b.rankId);
+      const ao=aR?(aR.sortOrder??aR.tier??999):999, bo=bR?(bR.sortOrder??bR.tier??999):999;
+      return ao!==bo ? ao-bo : (a.displayName||'').localeCompare(b.displayName||'');
+    });
+
+  const userCourses = selectedUser ? courses.filter(c=>(c.teacherIds||[]).includes(selectedUser.id)) : [];
+
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'260px 1fr',gap:'1.25rem',alignItems:'start'}}>
+
+      {/* ── Left panel ── */}
+      <div style={{display:'flex',flexDirection:'column',gap:'1rem',position:'sticky',top:'1rem'}}>
+
+        {/* Staff picker */}
+        <div className="panel">
+          <div className="panel-header"><div className="panel-title">Select Staff</div></div>
+          <div style={{padding:'.6rem .85rem',borderBottom:'1px solid var(--border)'}}>
+            <input className="search-input" placeholder="Search..." value={search} onChange={e=>setSearch(e.target.value)} style={{width:'100%'}}/>
+          </div>
+          <div style={{maxHeight:240,overflowY:'auto'}}>
+            {filteredUsers.map(u => {
+              const rank = ranks.find(r=>r.id===u.rankId);
+              const hasCourses = courses.filter(c=>(c.teacherIds||[]).includes(u.id)).length > 0;
+              return (
+                <div key={u.id} onClick={()=>loadUserSchedule(u)} style={{
+                  padding:'.5rem .85rem',cursor:'pointer',display:'flex',alignItems:'center',gap:'.6rem',
+                  background:selectedUser?.id===u.id?'var(--navy)':'transparent',
+                  borderBottom:'1px solid var(--border)',transition:'background .1s',
+                }}>
+                  <div className="avatar" style={{width:26,height:26,fontSize:10,flexShrink:0,background:selectedUser?.id===u.id?'rgba(255,255,255,.2)':undefined}}>{(u.displayName||'?')[0].toUpperCase()}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:'12.5px',fontWeight:500,color:selectedUser?.id===u.id?'white':'var(--navy)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.rpName||u.displayName}</div>
+                    <div style={{fontSize:'10.5px',color:selectedUser?.id===u.id?'rgba(255,255,255,.5)':'var(--text3)'}}>{rank?.name||'Unranked'}{hasCourses?' · 📚 Instructor':''}</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Block palette */}
+        <div className="panel">
+          <div className="panel-header"><div className="panel-title">Block Types</div><div className="panel-subtitle">Drag onto schedule</div></div>
+          <div style={{padding:'.6rem'}}>
+            {BLOCK_TYPES.map(bt=>(
+              <div key={bt.type} draggable onDragStart={()=>onDragStartPalette(bt.type)}
+                style={{display:'flex',alignItems:'center',gap:'.6rem',padding:'.4rem .6rem',borderRadius:7,marginBottom:3,background:`${bt.color}12`,border:`1px solid ${bt.color}30`,cursor:'grab',userSelect:'none'}}>
+                <span style={{fontSize:'14px'}}>{bt.icon}</span>
+                <span style={{fontSize:'12px',fontWeight:500,color:bt.color}}>{bt.label}</span>
+                <span style={{marginLeft:'auto',fontSize:'10px',color:'var(--text3)'}}>⠿</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Templates */}
+        <div className="panel">
+          <div className="panel-header"><div className="panel-title">Templates</div></div>
+          <div style={{padding:'.6rem',display:'flex',flexDirection:'column',gap:'.3rem'}}>
+            {Object.entries(SCHEDULE_TEMPLATES).map(([key,tpl])=>(
+              <button key={key} className="btn btn-ghost btn-sm" onClick={()=>applyTemplate(key)} style={{justifyContent:'flex-start',fontSize:'12px'}}>
+                📋 {tpl.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Trash */}
+        <div
+          onDragOver={e=>{e.preventDefault();e.currentTarget.style.background='#fee2e2';e.currentTarget.style.borderColor='#ef4444';}}
+          onDragLeave={e=>{e.currentTarget.style.background='';e.currentTarget.style.borderColor='';}}
+          onDrop={e=>{e.currentTarget.style.background='';e.currentTarget.style.borderColor='';onDropTrash(e);}}
+          style={{border:'2px dashed #fca5a5',borderRadius:'var(--radius)',padding:'1rem',textAlign:'center',color:'#ef4444',fontSize:'12px',transition:'all .15s'}}
+        >
+          🗑️ Drop here to remove
+        </div>
+      </div>
+
+      {/* ── Right: Schedule grid ── */}
+      <div>
+        {!selectedUser ? (
+          <div className="panel">
+            <div className="empty"><span className="empty-icon">👤</span><div className="empty-text">Select a staff member</div><div className="empty-sub">Choose someone from the left to build their schedule</div></div>
+          </div>
+        ) : (
+          <div className="panel">
+            {/* Header */}
+            <div className="panel-header" style={{flexWrap:'wrap',gap:'.75rem'}}>
+              <div style={{flex:1,minWidth:180}}>
+                <input value={scheduleName} onChange={e=>{setScheduleName(e.target.value);setSaved(false);}}
+                  style={{fontFamily:"'Playfair Display',serif",fontSize:'17px',fontWeight:600,color:'var(--navy)',background:'transparent',border:'none',outline:'none',width:'100%',padding:0}}
+                  placeholder="Schedule name..."/>
+                <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'1px'}}>
+                  {selectedUser.rpName||selectedUser.displayName}
+                  {userCourses.length>0 && <span style={{marginLeft:'.5rem',color:'var(--teal)'}}>· 📚 {userCourses.length} course{userCourses.length!==1?'s':''} assigned</span>}
+                </div>
+              </div>
+              <div style={{display:'flex',gap:'.4rem',alignItems:'center',flexShrink:0,flexWrap:'wrap'}}>
+                {saved && <span style={{fontSize:'12px',color:'var(--teal)',fontWeight:500}}>✓ Saved</span>}
+                {/* Auto-build button — prominent when user has courses */}
+                <button
+                  className="btn btn-sm"
+                  style={{background:userCourses.length>0?'var(--teal)':'var(--bg)',color:userCourses.length>0?'white':'var(--text2)',border:`1px solid ${userCourses.length>0?'var(--teal)':'var(--border)'}`,fontWeight:600}}
+                  onClick={autoBuildSchedule}
+                  disabled={autoBuilding}
+                  title={userCourses.length>0?'Build schedule from assigned courses':'Build schedule from role'}
+                >
+                  {autoBuilding ? <div className="spinner"/> : `⚡ Auto-build${userCourses.length>0?' from courses':''}`}
+                </button>
+                <button className="btn btn-primary btn-sm" onClick={saveSchedule} disabled={saving}>
+                  {saving ? <div className="spinner"/> : 'Save'}
+                </button>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div style={{padding:'.4rem 1.5rem',borderBottom:'1px solid var(--border)'}}>
+              <input className="form-input" value={scheduleNotes} onChange={e=>{setScheduleNotes(e.target.value);setSaved(false);}} placeholder="Notes..." style={{fontSize:'12px'}}/>
+            </div>
+
+            {/* Auto-build hint */}
+            {userCourses.length > 0 && Object.keys(blocks).length === 0 && (
+              <div style={{margin:'1rem',background:'linear-gradient(135deg,#f0fdf8,#e8f9f3)',border:'1px solid #9fe1cb',borderRadius:10,padding:'1rem 1.25rem',display:'flex',alignItems:'center',gap:'1rem'}}>
+                <span style={{fontSize:'24px'}}>⚡</span>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:'13px',color:'#0a5c45'}}>This instructor has {userCourses.length} course{userCourses.length!==1?'s':''} assigned</div>
+                  <div style={{fontSize:'12px',color:'#0f6e56',marginTop:'2px'}}>{userCourses.map(c=>`${c.name}${c.period?' ('+c.period+')':''}`).join(' · ')}</div>
+                </div>
+                <button className="btn btn-sm" style={{background:'var(--teal)',color:'white',border:'none',fontWeight:600,flexShrink:0}} onClick={autoBuildSchedule}>
+                  Auto-build schedule →
+                </button>
+              </div>
+            )}
+
+            {/* Period rows */}
+            <div style={{padding:'1rem'}}>
+              {bellSchedule.map(bell => {
+                const block = blocks[bell.period];
+                const bt = BLOCK_TYPES.find(t=>t.type===(block?.type||'free'));
+                const isOver = dragOver === bell.period;
+                const course = block?.courseId ? courses.find(c=>c.id===block.courseId) : null;
+                const autoCourse = !course && block?.type==='teaching'
+                  ? courses.find(c=>c.period===bell.period && (c.teacherIds||[]).includes(selectedUser.id))
+                  : null;
+                const displayCourse = course || autoCourse;
+
+                return (
+                  <div key={bell.period}
+                    onDragOver={e=>onDragOver(e,bell.period)}
+                    onDragLeave={()=>setDragOver(null)}
+                    onDrop={e=>onDrop(e,bell.period)}
+                    style={{
+                      display:'grid',gridTemplateColumns:'130px 1fr 130px',
+                      marginBottom:'.4rem',
+                      border:`2px ${isOver?'dashed':'solid'} ${isOver?'var(--teal)':block?`${bt?.color||'#888'}40`:'var(--border)'}`,
+                      borderLeft:`4px solid ${block?(bt?.color||'#888'):'#e5e7eb'}`,
+                      borderRadius:'var(--radius-sm)',
+                      background:isOver?'rgba(29,158,117,.05)':block?`${bt?.color||'#888'}06`:'var(--white)',
+                      overflow:'hidden',transition:'all .12s',minHeight:52,
+                    }}
+                  >
+                    {/* Bell info */}
+                    <div style={{padding:'.45rem .7rem',borderRight:'1px solid var(--border)',background:bell.type==='break'?'#f9fafb':'transparent',flexShrink:0}}>
+                      <div style={{fontSize:'11px',fontWeight:600,color:'var(--navy)'}}>{bell.period}</div>
+                      <div style={{fontSize:'9.5px',color:'var(--text3)',marginTop:'1px'}}>⏰ {bell.realStart}–{bell.realEnd}</div>
+                      <div style={{fontSize:'9.5px',color:'var(--text3)'}}>🎮 {bell.gameStart}–{bell.gameEnd}</div>
+                    </div>
+
+                    {/* Block */}
+                    <div style={{padding:'.45rem .7rem',display:'flex',alignItems:'center',gap:'.6rem',minWidth:0}}>
+                      {block ? (
+                        <div draggable onDragStart={()=>onDragStartBlock(bell.period)} style={{display:'flex',alignItems:'center',gap:'.6rem',width:'100%',cursor:'grab'}}>
+                          <span style={{fontSize:'15px',flexShrink:0}}>{bt?.icon||'📌'}</span>
+                          <div style={{flex:1,minWidth:0}}>
+                            {/* Show course name for teaching blocks, editable label otherwise */}
+                            {block.type==='teaching' && displayCourse ? (
+                              <div>
+                                <div style={{fontWeight:600,fontSize:'12.5px',color:'var(--navy)'}}>{displayCourse.name}</div>
+                                <div style={{display:'flex',gap:'.25rem',marginTop:'2px',flexWrap:'wrap'}}>
+                                  {(displayCourse.grades||[]).sort().map(g=>(
+                                    <span key={g} style={{fontSize:'9.5px',fontWeight:600,padding:'1px 5px',borderRadius:8,background:'#e8eeff',color:'#1a3470'}}>Gr {g}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : (
+                              <input value={block.label||''} onChange={e=>{setSaved(false);setBlocks(b=>({...b,[bell.period]:{...b[bell.period],label:e.target.value}}));}} onClick={e=>e.stopPropagation()}
+                                style={{fontWeight:600,fontSize:'12.5px',color:'var(--navy)',background:'transparent',border:'none',outline:'none',width:'100%',padding:0,cursor:'text'}}/>
+                            )}
+                            {/* Course picker for teaching blocks */}
+                            {block.type==='teaching' && userCourses.length>0 && !displayCourse && (
+                              <select value={block.courseId||''} onChange={e=>{setSaved(false);setBlocks(b=>({...b,[bell.period]:{...b[bell.period],courseId:e.target.value}}));}} onClick={e=>e.stopPropagation()}
+                                style={{fontSize:'11px',color:'var(--teal)',background:'transparent',border:'none',outline:'none',cursor:'pointer',maxWidth:170,marginTop:'1px'}}>
+                                <option value=''>— Assign course —</option>
+                                {userCourses.map(c=><option key={c.id} value={c.id}>{c.name}{c.period?' ('+c.period+')':''}</option>)}
+                              </select>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span style={{fontSize:'11.5px',color:isOver?'var(--teal)':'var(--text3)',fontStyle:'italic'}}>
+                          {isOver?'Drop here':'Drag a block type here...'}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Notes */}
+                    <div style={{padding:'.45rem .7rem',borderLeft:'1px solid var(--border)',display:'flex',alignItems:'center'}}>
+                      {block && (
+                        <input value={block.notes||''} onChange={e=>{setSaved(false);setBlocks(b=>({...b,[bell.period]:{...b[bell.period],notes:e.target.value}}));}}
+                          placeholder="Notes..." style={{fontSize:'11px',color:'var(--text3)',background:'transparent',border:'none',outline:'none',width:'100%'}}/>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Preview */}
+            <div style={{padding:'1rem',borderTop:'1px solid var(--border)'}}>
+              <div style={{fontSize:'11px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'.75rem'}}>Staff Preview</div>
+              <ScheduleView blocks={Object.values(blocks)} courses={courses} userId={selectedUser.id} bellSchedule={bellSchedule}/>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+// ── Manage Bell Schedule (Admin) ──
+function ManageBellSchedule({ profile }) {
+  const [periods, setPeriods] = useState(null); // null = loading
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [dragIdx, setDragIdx] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+
+  const COLORS = ['#3b82f6','#8b5cf6','#ec4899','#f59e0b','#10b981','#6b7280','#1D9E75','#0B1F4A','#e74c3c'];
+
+  useEffect(() => {
+    db.collection('settings').doc('bell_schedule').get().then(doc => {
+      if (doc.exists && doc.data().periods?.length) {
+        setPeriods(doc.data().periods.map(p=>({...p})));
+      } else {
+        setPeriods(BELL_SCHEDULE.map(p=>({...p})));
+      }
+    });
+  }, []);
+
+  const update = (i, field, val) => {
+    setSaved(false);
+    setPeriods(p => p.map((row,idx) => idx===i ? {...row,[field]:val} : row));
+  };
+
+  const addPeriod = () => {
+    setSaved(false);
+    setPeriods(p => [...p, { period:`Period ${p.length+1}`, realStart:'00:00', realEnd:'00:00', gameStart:'0:00 AM', gameEnd:'0:00 AM', color:'#3b82f6' }]);
+  };
+
+  const removePeriod = (i) => {
+    if (!confirm('Remove this period?')) return;
+    setSaved(false);
+    setPeriods(p => p.filter((_,idx)=>idx!==i));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    await db.collection('settings').doc('bell_schedule').set({ periods, updatedAt: firebase.firestore.FieldValue.serverTimestamp(), updatedBy: profile.displayName });
+    await addLog(profile.id, profile.displayName, 'Updated bell schedule');
+    setSaving(false); setSaved(true);
+    setTimeout(()=>setSaved(false), 3000);
+  };
+
+  const resetToDefault = () => {
+    if (!confirm('Reset to the default bell schedule? Your changes will be lost.')) return;
+    setPeriods(BELL_SCHEDULE.map(p=>({...p})));
+    setSaved(false);
+  };
+
+  // Drag to reorder
+  const onDragStart = (i) => setDragIdx(i);
+  const onDragOver = (e, i) => { e.preventDefault(); setDragOverIdx(i); };
+  const onDrop = (i) => {
+    if (dragIdx === null || dragIdx === i) { setDragIdx(null); setDragOverIdx(null); return; }
+    setPeriods(p => {
+      const arr = [...p];
+      const [moved] = arr.splice(dragIdx, 1);
+      arr.splice(i, 0, moved);
+      return arr;
+    });
+    setDragIdx(null); setDragOverIdx(null); setSaved(false);
+  };
+
+  if (!periods) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:'4rem'}}><div className="spinner spinner-dark"/></div>;
+
+  return (
+    <div>
+      <div className="panel">
+        <div className="panel-header" style={{flexWrap:'wrap',gap:'.75rem'}}>
+          <div>
+            <div className="panel-title">Bell Schedule Editor</div>
+            <div className="panel-subtitle">Set real times and in-game times for each period · Drag rows to reorder</div>
+          </div>
+          <div style={{display:'flex',gap:'.5rem',alignItems:'center'}}>
+            {saved && <span style={{fontSize:'12px',color:'var(--teal)',fontWeight:500}}>✓ Saved</span>}
+            <button className="btn btn-ghost btn-sm" onClick={resetToDefault}>Reset to default</button>
+            <button className="btn btn-ghost btn-sm" onClick={addPeriod}><Icon name="plus" size={12}/> Add period</button>
+            <button className="btn btn-primary btn-sm" onClick={save} disabled={saving}>
+              {saving?<div className="spinner"/>:'Save schedule'}
+            </button>
+          </div>
+        </div>
+
+        {/* Column headers */}
+        <div style={{display:'grid',gridTemplateColumns:'28px 160px 110px 110px 130px 130px 80px 36px',gap:'.5rem',padding:'.5rem 1.25rem',background:'var(--bg)',borderBottom:'1px solid var(--border)',fontSize:'11px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.06em'}}>
+          <div/>
+          <div>Period name</div>
+          <div>Real start</div>
+          <div>Real end</div>
+          <div>Game start</div>
+          <div>Game end</div>
+          <div>Color</div>
+          <div/>
+        </div>
+
+        {periods.map((p, i) => (
+          <div
+            key={i}
+            draggable
+            onDragStart={()=>onDragStart(i)}
+            onDragOver={e=>onDragOver(e,i)}
+            onDragLeave={()=>setDragOverIdx(null)}
+            onDrop={()=>onDrop(i)}
+            style={{
+              display:'grid',gridTemplateColumns:'28px 160px 110px 110px 130px 130px 80px 36px',
+              gap:'.5rem',padding:'.6rem 1.25rem',
+              borderBottom:'1px solid var(--border)',alignItems:'center',
+              background: dragOverIdx===i ? 'rgba(29,158,117,.05)' : i%2===0 ? 'var(--white)' : '#fafaf9',
+              borderLeft: `3px solid ${p.color||'#888'}`,
+              transition:'background .1s',
+              cursor:'grab',
+            }}
+          >
+            <div style={{color:'var(--text3)',fontSize:'14px',cursor:'grab'}}>⠿</div>
+            <input
+              className="form-input"
+              value={p.period}
+              onChange={e=>update(i,'period',e.target.value)}
+              style={{fontSize:'13px',fontWeight:500,padding:'.3rem .5rem',height:'auto'}}
+            />
+            <input className="form-input" value={p.realStart} onChange={e=>update(i,'realStart',e.target.value)} placeholder="08:00" style={{fontSize:'13px',padding:'.3rem .5rem',height:'auto',fontFamily:'monospace'}}/>
+            <input className="form-input" value={p.realEnd} onChange={e=>update(i,'realEnd',e.target.value)} placeholder="08:50" style={{fontSize:'13px',padding:'.3rem .5rem',height:'auto',fontFamily:'monospace'}}/>
+            <input className="form-input" value={p.gameStart} onChange={e=>update(i,'gameStart',e.target.value)} placeholder="8:00 AM" style={{fontSize:'13px',padding:'.3rem .5rem',height:'auto'}}/>
+            <input className="form-input" value={p.gameEnd} onChange={e=>update(i,'gameEnd',e.target.value)} placeholder="9:15 AM" style={{fontSize:'13px',padding:'.3rem .5rem',height:'auto'}}/>
+            <div style={{display:'flex',alignItems:'center',gap:'.4rem'}}>
+              <input type="color" value={p.color||'#3b82f6'} onChange={e=>update(i,'color',e.target.value)} style={{width:32,height:28,border:'1px solid var(--border)',borderRadius:6,cursor:'pointer',padding:2}}/>
+            </div>
+            <button className="btn btn-danger btn-sm" style={{padding:'.25rem .4rem'}} onClick={()=>removePeriod(i)}><Icon name="trash" size={12}/></button>
+          </div>
+        ))}
+
+        {/* Preview */}
+        <div style={{padding:'1.25rem',borderTop:'1px solid var(--border)'}}>
+          <div style={{fontSize:'11px',fontWeight:700,color:'var(--text3)',textTransform:'uppercase',letterSpacing:'.08em',marginBottom:'.75rem'}}>Preview</div>
+          <div style={{background:'linear-gradient(135deg,#0B1F4A,#0a2a1e)',borderRadius:'var(--radius)',padding:'1rem 1.25rem'}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(210px,1fr))',gap:'.4rem'}}>
+              {periods.map((b,i)=>(
+                <div key={i} style={{background:'rgba(255,255,255,.06)',borderRadius:8,padding:'.5rem .75rem',display:'flex',alignItems:'center',gap:'.5rem',border:`1px solid ${b.color||'#888'}44`}}>
+                  <div style={{width:3,alignSelf:'stretch',borderRadius:2,background:b.color||'#888',flexShrink:0}}/>
+                  <div>
+                    <div style={{fontSize:'11px',fontWeight:600,color:'white'}}>{b.period}</div>
+                    <div style={{fontSize:'9.5px',color:'rgba(255,255,255,.45)',marginTop:'1px'}}>{b.realStart}–{b.realEnd} · {b.gameStart}–{b.gameEnd}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
