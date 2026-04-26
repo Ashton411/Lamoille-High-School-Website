@@ -11,7 +11,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
-<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script> 
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-storage-compat.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -818,6 +818,111 @@ function App() {
 }
 
 // ── Login / Register ──
+
+// ── Reusable searchable staff picker ──
+function StaffPicker({ users, value, onChange, placeholder='Search staff...' }) {
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const selected = users.find(u => u.id === value);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filtered = users.filter(u => {
+    const q = search.toLowerCase();
+    return (u.displayName||'').toLowerCase().includes(q) ||
+           (u.rpName||'').toLowerCase().includes(q) ||
+           (u.rankName||'').toLowerCase().includes(q);
+  });
+
+  return (
+    <div ref={ref} style={{position:'relative'}}>
+      {/* Trigger */}
+      <div
+        onClick={()=>setOpen(o=>!o)}
+        style={{
+          display:'flex',alignItems:'center',gap:'.5rem',
+          padding:'.55rem .75rem',border:'1px solid var(--border)',
+          borderRadius:'var(--radius-sm)',background:'var(--white)',
+          cursor:'pointer',minHeight:40,
+          boxShadow: open ? '0 0 0 3px rgba(29,158,117,.15)' : 'none',
+          borderColor: open ? 'var(--teal)' : 'var(--border)',
+          transition:'all .15s',
+        }}>
+        {selected ? (
+          <>
+            <div className="avatar" style={{width:24,height:24,fontSize:10,flexShrink:0}}>{(selected.displayName||'?')[0].toUpperCase()}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:600,fontSize:'13px',color:'var(--navy)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{selected.rpName||selected.displayName}</div>
+              {selected.rankName && <div style={{fontSize:'10.5px',color:'var(--text3)'}}>{selected.rankName}</div>}
+            </div>
+            <button onClick={e=>{e.stopPropagation();onChange('');setSearch('');}} style={{background:'none',border:'none',cursor:'pointer',color:'#bbb',fontSize:14,padding:'0 2px',flexShrink:0}}>×</button>
+          </>
+        ) : (
+          <>
+            <span style={{fontSize:'13px',color:'var(--text3)',flex:1}}>{placeholder}</span>
+            <Icon name="search" size={14} color="var(--text3)"/>
+          </>
+        )}
+      </div>
+
+      {/* Dropdown */}
+      {open && (
+        <div style={{
+          position:'absolute',top:'calc(100% + 4px)',left:0,right:0,zIndex:999,
+          background:'var(--white)',border:'1px solid var(--border)',
+          borderRadius:'var(--radius-sm)',boxShadow:'0 8px 24px rgba(0,0,0,.12)',
+          overflow:'hidden',
+        }}>
+          {/* Search */}
+          <div style={{padding:'.4rem',borderBottom:'1px solid var(--border)',background:'var(--bg)'}}>
+            <input
+              autoFocus
+              className="form-input"
+              value={search}
+              onChange={e=>setSearch(e.target.value)}
+              placeholder="Type to search..."
+              style={{fontSize:'13px',padding:'.35rem .6rem',height:'auto'}}
+              onClick={e=>e.stopPropagation()}
+            />
+          </div>
+          {/* Results */}
+          <div style={{maxHeight:220,overflowY:'auto'}}>
+            {filtered.length === 0 ? (
+              <div style={{padding:'1rem',textAlign:'center',color:'var(--text3)',fontSize:'13px'}}>No staff found</div>
+            ) : filtered.map(u => (
+              <div key={u.id}
+                onClick={()=>{ onChange(u.id); setOpen(false); setSearch(''); }}
+                style={{
+                  display:'flex',alignItems:'center',gap:'.6rem',
+                  padding:'.5rem .75rem',cursor:'pointer',
+                  background: u.id===value ? 'rgba(29,158,117,.06)' : 'transparent',
+                  borderBottom:'1px solid var(--border)',
+                  transition:'background .1s',
+                }}
+                onMouseEnter={e=>e.currentTarget.style.background='var(--bg)'}
+                onMouseLeave={e=>e.currentTarget.style.background=u.id===value?'rgba(29,158,117,.06)':'transparent'}
+              >
+                <div className="avatar" style={{width:28,height:28,fontSize:11,flexShrink:0,background:u.id===value?'var(--teal)':undefined}}>{(u.displayName||'?')[0].toUpperCase()}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:'13px',color:'var(--navy)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{u.rpName||u.displayName}</div>
+                  <div style={{fontSize:'11px',color:'var(--text3)'}}>{u.rankName||'Unranked'} {u.departmentName?`· ${u.departmentName}`:''}</div>
+                </div>
+                {u.id===value && <span style={{color:'var(--teal)',fontSize:'16px',flexShrink:0}}>✓</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 function LoginPage({ user, setUser, setProfile }) {
   const [tab, setTab] = useState('login');       // 'login' | 'register' | 'forgot' | 'verify'
@@ -2253,10 +2358,7 @@ function Discipline({ profile }) {
             <div className="modal-body">
               <div className="form-group">
                 <label className="form-label">Staff member</label>
-                <select className="form-input form-select" value={form.userId} onChange={e=>setForm(f=>({...f,userId:e.target.value}))}>
-                  <option value="">Select staff member</option>
-                  {users.map(u=><option key={u.id} value={u.id}>{u.displayName}</option>)}
-                </select>
+                <StaffPicker users={users} value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))} placeholder="Search staff member..."/>
               </div>
               <div className="form-group">
                 <label className="form-label">Action type</label>
@@ -2349,10 +2451,7 @@ function Promotions({ profile }) {
             <div className="modal-body">
               <div className="form-group">
                 <label className="form-label">Staff member</label>
-                <select className="form-input form-select" value={form.userId} onChange={e=>setForm(f=>({...f,userId:e.target.value}))}>
-                  <option value="">Select staff member</option>
-                  {users.map(u=><option key={u.id} value={u.id}>{u.displayName} — {u.rankName||'Unranked'}</option>)}
-                </select>
+                <StaffPicker users={users} value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))} placeholder="Search staff member..."/>
               </div>
               <div className="form-group">
                 <label className="form-label">New rank</label>
@@ -3209,10 +3308,7 @@ function Commendations({ profile }) {
             <div className="modal-header"><span className="modal-title">Issue Commendation</span><button className="modal-close" onClick={()=>setModal(false)}><Icon name="x" size={14}/></button></div>
             <div className="modal-body">
               <div className="form-group"><label className="form-label">Staff member</label>
-                <select className="form-input form-select" value={form.userId} onChange={e=>setForm(f=>({...f,userId:e.target.value}))}>
-                  <option value="">Select staff member</option>
-                  {users.map(u=><option key={u.id} value={u.id}>{u.displayName}</option>)}
-                </select>
+                <StaffPicker users={users} value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))} placeholder="Search staff member..."/>
               </div>
               <div className="form-group"><label className="form-label">Commendation message</label>
                 <textarea className="form-input" rows={4} value={form.message} onChange={e=>setForm(f=>({...f,message:e.target.value}))} placeholder="Describe why this staff member deserves recognition..."/>
@@ -3430,10 +3526,7 @@ function EmployeeOfMonth({ profile }) {
             <div className="modal-header"><span className="modal-title">Set Employee of the Month</span><button className="modal-close" onClick={()=>setModal(false)}><Icon name="x" size={14}/></button></div>
             <div className="modal-body">
               <div className="form-group"><label className="form-label">Staff member</label>
-                <select className="form-input form-select" value={form.userId} onChange={e=>setForm(f=>({...f,userId:e.target.value}))}>
-                  <option value="">Select staff member</option>
-                  {users.map(u=><option key={u.id} value={u.id}>{u.displayName}</option>)}
-                </select>
+                <StaffPicker users={users} value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))} placeholder="Search staff member..."/>
               </div>
               <div className="form-group"><label className="form-label">Month (e.g. April 2026)</label>
                 <input className="form-input" value={form.month} onChange={e=>setForm(f=>({...f,month:e.target.value}))} placeholder="April 2026"/>
@@ -3619,10 +3712,7 @@ function EmploymentRecords({ profile }) {
             <div className="modal-body">
               <div className="form-group">
                 <label className="form-label">Staff member</label>
-                <select className="form-input form-select" value={form.userId} onChange={e=>setForm(f=>({...f,userId:e.target.value}))}>
-                  <option value="">Select staff member</option>
-                  {users.map(u=><option key={u.id} value={u.id}>{u.displayName} — {u.rankName||'Unranked'}</option>)}
-                </select>
+                <StaffPicker users={users} value={form.userId} onChange={v=>setForm(f=>({...f,userId:v}))} placeholder="Search staff member..."/>
               </div>
               <div className="form-group">
                 <label className="form-label">Record type</label>
