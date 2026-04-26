@@ -5101,8 +5101,8 @@ function ManageCourses({ profile }) {
 
           {/* Side panel */}
           <div style={{display:'flex',flexDirection:'column',gap:'.85rem',position:'sticky',top:'1rem'}}>
-            {/* Drag palette — unique course names, one chip per course */}
-            <div className="panel">
+            {/* Drag palette — grouped by department */}
+            <div className="panel" style={{overflow:'hidden'}}>
               <div className="panel-header" style={{padding:'.7rem 1rem'}}>
                 <div>
                   <div className="panel-title" style={{fontSize:'13.5px'}}>Courses</div>
@@ -5110,13 +5110,74 @@ function ManageCourses({ profile }) {
                 </div>
                 <span className="badge badge-navy">{courses.length}</span>
               </div>
-              <div style={{padding:'.5rem',display:'flex',flexDirection:'column',gap:'.3rem',maxHeight:420,overflowY:'auto'}}>
-                {/* Deduplicate by name for the palette — show one chip per unique course name */}
-                {[...new Map(courses.map(c=>[c.name,c])).values()].map(c=>(
-                  <Chip key={c.id} c={c} inCell={false}/>
-                ))}
+              {/* Search */}
+              <div style={{padding:'.4rem .5rem',borderBottom:'1px solid var(--border)',background:'var(--bg)'}}>
+                <input
+                  className="form-input"
+                  placeholder="Search courses..."
+                  style={{fontSize:'12px',padding:'.3rem .5rem',height:'auto'}}
+                  onChange={e=>{
+                    const q=e.target.value.toLowerCase();
+                    const chips=e.target.closest('.panel').querySelectorAll('.course-chip-row');
+                    const groups=e.target.closest('.panel').querySelectorAll('.dept-group');
+                    chips.forEach(chip=>{
+                      chip.style.display=chip.dataset.name?.includes(q)?'':'none';
+                    });
+                    // Hide empty groups
+                    groups.forEach(g=>{
+                      const visible=[...g.querySelectorAll('.course-chip-row')].some(c=>c.style.display!=='none');
+                      g.style.display=visible?'':'none';
+                    });
+                  }}
+                />
+              </div>
+              <div style={{maxHeight:500,overflowY:'auto'}}>
+                {(() => {
+                  const DEPT_ORDER = ['English','Math','Science','Social Studies','World Language','PE & Health','Fine Arts','CTE'];
+                  // Deduplicate by name, keep first occurrence
+                  const unique = [...new Map(courses.map(c=>[c.name,c])).values()];
+                  const byDept = {};
+                  unique.forEach(c => {
+                    const d = c.dept || 'Other';
+                    if (!byDept[d]) byDept[d] = [];
+                    byDept[d].push(c);
+                  });
+                  const depts = [
+                    ...DEPT_ORDER.filter(d=>byDept[d]?.length),
+                    ...Object.keys(byDept).filter(d=>!DEPT_ORDER.includes(d)&&byDept[d]?.length),
+                  ];
+                  return depts.map(dept => {
+                    const color = DEPT_COLORS[dept] || '#888';
+                    const list = byDept[dept];
+                    return (
+                      <div key={dept} className="dept-group" style={{borderBottom:'1px solid var(--border)'}}>
+                        {/* Dept header */}
+                        <div style={{
+                          display:'flex',alignItems:'center',gap:'.5rem',
+                          padding:'.4rem .6rem',background:'var(--bg)',
+                          borderLeft:`3px solid ${color}`,
+                          fontSize:'11px',fontWeight:700,color:'var(--text2)',
+                          textTransform:'uppercase',letterSpacing:'.05em',
+                        }}>
+                          <span style={{width:7,height:7,borderRadius:'50%',background:color,flexShrink:0}}/>
+                          {dept}
+                          <span style={{marginLeft:'auto',fontWeight:400,color:'var(--text3)',textTransform:'none',letterSpacing:0}}>{list.length}</span>
+                        </div>
+                        {/* Courses */}
+                        <div style={{padding:'.3rem .4rem',display:'flex',flexDirection:'column',gap:'.25rem'}}>
+                          {list.map(c=>(
+                            <div key={c.id} className="course-chip-row" data-name={c.name.toLowerCase()}>
+                              <Chip c={c} inCell={false}/>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
               </div>
             </div>
+
             {/* Unscheduled */}
             {unscheduled.length > 0 && (
               <div className="panel">
